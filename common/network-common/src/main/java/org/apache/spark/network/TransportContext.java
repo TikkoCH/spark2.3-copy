@@ -129,14 +129,21 @@ public class TransportContext {
   }
 
   /**
+   *
+   * 初始化一个客户端或服务端的Netty Channel Pipeline ,该Pipeline会编码解码数据
+   * 并且有一个TransportChannelHandler来处理请求或者响应.<br>
    * Initializes a client or server Netty Channel Pipeline which encodes/decodes messages and
    * has a {@link org.apache.spark.network.server.TransportChannelHandler} to handle request or
    * response messages.
    *
-   * @param channel The channel to initialize.
-   * @param channelRpcHandler The RPC handler to use for the channel.
+   * @param channel 要被初始化的channel<br> The channel to initialize.
+   * @param channelRpcHandler channel中使用的handler <br>
+   *                          The RPC handler to use for the channel.
    *
-   * @return Returns the created TransportChannelHandler, which includes a TransportClient that can
+   * @return 返回创建的TransportChannelHandler，其中包含可用于在此通道上通信的TransportClient。
+   * TransportClient直接与ChannelHandler相关联，以确保同一通道的所有用户都获得相同的TransportClient对象。<br>
+   *
+   * Returns the created TransportChannelHandler, which includes a TransportClient that can
    * be used to communicate on this channel. The TransportClient is directly associated with a
    * ChannelHandler to ensure all users of the same channel get the same TransportClient object.
    */
@@ -161,6 +168,8 @@ public class TransportContext {
   }
 
   /**
+   *
+   *
    * Creates the server- and client-side handler which is used to handle both RequestMessages and
    * ResponseMessages. The channel is expected to have been successfully created, though certain
    * properties (such as the remoteAddress()) may not be available yet.

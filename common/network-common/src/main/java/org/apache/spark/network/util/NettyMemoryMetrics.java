@@ -31,14 +31,18 @@ import io.netty.buffer.PooledByteBufAllocator;
 import io.netty.buffer.PooledByteBufAllocatorMetric;
 
 /**
+ *  Metric是一个java开源项目,用来监控JVM的各种指标信息,
+ *  有兴趣可以看一下https://github.com/dropwizard/metrics
+ * Netty内存度量类，用于从Netty PooledByteBufAllocator收集度量值
  * A Netty memory metrics class to collect metrics from Netty PooledByteBufAllocator.
  */
 public class NettyMemoryMetrics implements MetricSet {
 
+  /**池化缓存分配器*/
   private final PooledByteBufAllocator pooledAllocator;
-
+  /**是否开启啰嗦模式,信息会详尽*/
   private final boolean verboseMetricsEnabled;
-
+  /**Metric的Map */
   private final Map<String, Metric> allMetrics;
 
   private final String metricPrefix;
@@ -65,6 +69,12 @@ public class NettyMemoryMetrics implements MetricSet {
       "numActiveBytes"));
   }
 
+  /**
+   *
+   * @param pooledAllocator
+   * @param metricPrefix
+   * @param conf
+   */
   public NettyMemoryMetrics(PooledByteBufAllocator pooledAllocator,
       String metricPrefix,
       TransportConf conf) {

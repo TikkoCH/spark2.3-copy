@@ -67,9 +67,9 @@ public class TransportServer implements Closeable {
       RpcHandler appRpcHandler,
       List<TransportServerBootstrap> bootstraps) {
     this.context = context;
-    this.conf = context.getConf();
-    this.appRpcHandler = appRpcHandler;
-    this.bootstraps = Lists.newArrayList(Preconditions.checkNotNull(bootstraps));
+    this.conf = context.getConf();//根据Context获取配置
+    this.appRpcHandler = appRpcHandler;//参数传进的Handler作为Handler
+    this.bootstraps = Lists.newArrayList(Preconditions.checkNotNull(bootstraps));//引导程序的列表
 
     try {
       init(hostToBind, portToBind);//初始化
@@ -90,22 +90,27 @@ public class TransportServer implements Closeable {
     //Netty服务端需要同事创建bossGroup和workerGroup
       // 根据conf设置IO的模式,默认是nio模式
     IOMode ioMode = IOMode.valueOf(conf.ioMode());
+    //这是Netty中server比较常用的结构,bossGroup用来处理连接,workerGroup用来处理数据的操作.reactor模式.
     EventLoopGroup bossGroup =
       NettyUtils.createEventLoop(ioMode, conf.serverThreads(), conf.getModuleName() + "-server");
     EventLoopGroup workerGroup = bossGroup;
-
+    //创建IO缓冲区分配者,分配至可以分配IO缓冲区,这里使用了池化的缓冲区分配器
+    //设置了是否使用直接缓冲区,是否允许缓存,服务端线程数
     PooledByteBufAllocator allocator = NettyUtils.createPooledByteBufAllocator(
       conf.preferDirectBufs(), true /* allowCache */, conf.serverThreads());
-
+    //构造引导程序
     bootstrap = new ServerBootstrap()
       .group(bossGroup, workerGroup)
-      .channel(NettyUtils.getServerChannelClass(ioMode))
+      .channel(NettyUtils.getServerChannelClass(ioMode))//根据io模式设置channel类型,可当做模版代码
       .option(ChannelOption.ALLOCATOR, allocator)
-      .childOption(ChannelOption.ALLOCATOR, allocator);
+      .childOption(ChannelOption.ALLOCATOR, allocator);//设置buffer的分配者
 
+    //这是2.3新增的,Metric是一个JAVA的开源性能监控项目,这里用来监控Netty的内存情况
+    //https://github.com/dropwizard/metrics这是这个项目的github地址
     this.metrics = new NettyMemoryMetrics(
       allocator, conf.getModuleName() + "-server", conf);
 
+    //下面这三个判断用来添加引导的一些额外参数,可以参考一下Netty.
     if (conf.backLog() > 0) {
       bootstrap.option(ChannelOption.SO_BACKLOG, conf.backLog());
     }
@@ -118,6 +123,7 @@ public class TransportServer implements Closeable {
       bootstrap.childOption(ChannelOption.SO_SNDBUF, conf.sendBuf());
     }
 
+    //为根引导程序设置channel初始化的回调.
     bootstrap.childHandler(new ChannelInitializer<SocketChannel>() {
       @Override
       protected void initChannel(SocketChannel ch) {
@@ -129,11 +135,12 @@ public class TransportServer implements Closeable {
       }
     });
 
+    //绑定socket监听端口
     InetSocketAddress address = hostToBind == null ?
         new InetSocketAddress(portToBind): new InetSocketAddress(hostToBind, portToBind);
     channelFuture = bootstrap.bind(address);
     channelFuture.syncUninterruptibly();
-
+    //最后设置成员变量port,初始化操作就完成了
     port = ((InetSocketAddress) channelFuture.channel().localAddress()).getPort();
     logger.debug("Shuffle server started on port: {}", port);
   }

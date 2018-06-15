@@ -75,7 +75,9 @@ public class TransportClientFactory implements Closeable {
 
   private static final Logger logger = LoggerFactory.getLogger(TransportClientFactory.class);
 
+   /**上下文 */
   private final TransportContext context;
+  /**配置*/
   private final TransportConf conf;
   private final List<TransportClientBootstrap> clientBootstraps;
   private final ConcurrentHashMap<SocketAddress, ClientPool> connectionPool;
@@ -245,7 +247,7 @@ public class TransportClientFactory implements Closeable {
 
     final AtomicReference<TransportClient> clientRef = new AtomicReference<>();
     final AtomicReference<Channel> channelRef = new AtomicReference<>();
-    //设置回调函数,当连接成功回调时,会将上面两个原子引用设置值
+    //设置回调函数,当连接成功回调时,会将上面两个原子引用设置值.这是netty构建通信程序的基本api.
     bootstrap.handler(new ChannelInitializer<SocketChannel>() {
       @Override
       public void initChannel(SocketChannel ch) {
@@ -259,7 +261,7 @@ public class TransportClientFactory implements Closeable {
     // Connect to the remote server
     long preConnect = System.nanoTime();
     ChannelFuture cf = bootstrap.connect(address);
-    //不行就抛异常
+    //无法连接就抛异常
     if (!cf.await(conf.connectionTimeoutMs())) {
       throw new IOException(
         String.format("Connecting to %s timed out (%s ms)", address, conf.connectionTimeoutMs()));
@@ -270,7 +272,7 @@ public class TransportClientFactory implements Closeable {
     TransportClient client = clientRef.get();
     Channel channel = channelRef.get();
     assert client != null : "Channel future completed successfully with null client";
-
+    //在标记客户端成功之前,同步引导执行所有客户端
     // Execute any client bootstraps synchronously before marking the Client as successful.
     long preBootstrap = System.nanoTime();
     logger.debug("Connection to {} successful, running bootstraps...", address);
@@ -278,6 +280,7 @@ public class TransportClientFactory implements Closeable {
       for (TransportClientBootstrap clientBootstrap : clientBootstraps) {
         clientBootstrap.doBootstrap(client, channel);//为客户端设置引导程序
       }
+      //也要捕获非运行时异常,因为可能是scala写的引导
     } catch (Exception e) { // catch non-RuntimeExceptions too as bootstrap may be written in Scala
       long bootstrapTimeMs = (System.nanoTime() - preBootstrap) / 1000000;
       logger.error("Exception while bootstrapping client after " + bootstrapTimeMs + " ms", e);
@@ -292,7 +295,9 @@ public class TransportClientFactory implements Closeable {
     return client;
   }
 
-  /** Close all connections in the connection pool, and shutdown the worker thread pool. */
+  /**
+   * 关闭连接池所有连接,并且关闭worker线程池
+   * Close all connections in the connection pool, and shutdown the worker thread pool. */
   @Override
   public void close() {
     // Go through all clients and close them if they are active.

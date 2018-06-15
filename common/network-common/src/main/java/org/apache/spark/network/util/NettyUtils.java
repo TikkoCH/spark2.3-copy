@@ -101,6 +101,9 @@ public class NettyUtils {
   }
 
   /**
+   *
+   * 创建一个池化的ByteBuf分配器，但禁用线程本地缓存。 TransportClients禁用线程本地缓存，因为ByteBufs由eventLoop线程分配，
+   * 但由执行程序线程而不是eventloop线程释放。 那些线程本地缓存实际上会延迟缓冲区的回收，导致更大的内存使用量。
    * Create a pooled ByteBuf allocator but disables the thread-local cache. Thread-local caches
    * are disabled for TransportClients because the ByteBufs are allocated by the event loop thread,
    * but released by the executor thread rather than the event loop thread. Those thread-local
