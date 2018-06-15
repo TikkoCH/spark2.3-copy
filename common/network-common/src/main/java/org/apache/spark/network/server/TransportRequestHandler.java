@@ -204,6 +204,7 @@ public class TransportRequestHandler extends MessageHandler<RequestMessage> {
 
   private void processRpcRequest(final RpcRequest req) {
     try {
+      //处理RPC请求时直接调用receive方法
       rpcHandler.receive(reverseClient, req.body().nioByteBuffer(), new RpcResponseCallback() {
         @Override
         public void onSuccess(ByteBuffer response) {
@@ -223,6 +224,7 @@ public class TransportRequestHandler extends MessageHandler<RequestMessage> {
     }
   }
 
+  //代用receive双参的重载方法,默认callback是OneWayCallback
   private void processOneWayMessage(OneWayMessage req) {
     try {
       rpcHandler.receive(reverseClient, req.body().nioByteBuffer());
@@ -234,11 +236,15 @@ public class TransportRequestHandler extends MessageHandler<RequestMessage> {
   }
 
   /**
+   * 响应单个消息和一些可编码的对象.如果发送时失败了,会用日志记录下来并关闭管道
    * Responds to a single message with some Encodable object. If a failure occurs while sending,
    * it will be logged and the channel closed.
    */
   private ChannelFuture respond(Encodable result) {
+    //通过channel获取地址
     SocketAddress remoteAddress = channel.remoteAddress();
+    //这是netty框架的基本代码,channelFuture是Netty中封装的jdk的future.不理解可以了解一下Netty框架.
+    //将结果写入管道响应客户端并且添加一个监听,添加监听会返回ChannelFuture
     return channel.writeAndFlush(result).addListener(future -> {
       if (future.isSuccess()) {
         logger.trace("Sent result {} to client {}", result, remoteAddress);

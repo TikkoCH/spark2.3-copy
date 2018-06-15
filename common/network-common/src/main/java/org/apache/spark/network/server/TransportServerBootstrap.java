@@ -23,6 +23,7 @@ import io.netty.channel.Channel;
  *
  * 客户端连接到服务器后，在传输服务器的客户端通道上执行的引导程序。
  * 然后可以自定义客户端通道用来诸如SASL认证之类的事情。
+ * bootstrap是Netty中用来串联服务或者客户端的各个组件的线索,不太了解的话可以阅读一下<<Netty in action>><br>
  * A bootstrap which is executed on a TransportServer's client channel once a client connects
  * to the server. This allows customizing the client channel to allow for things such as SASL
  * authentication.
@@ -30,7 +31,7 @@ import io.netty.channel.Channel;
 public interface TransportServerBootstrap {
   /**
    *
-   * 如果需要的话可以自定义channel来包含一些新特性
+   * 如果需要的话可以自定义channel来包含一些新特性<br>
    * Customizes the channel to include new features, if needed.
    *
    * @param channel  客户端打开的已连接channel The connected channel opened by the client.
