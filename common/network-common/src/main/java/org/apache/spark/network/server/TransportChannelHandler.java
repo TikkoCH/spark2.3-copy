@@ -112,6 +112,12 @@ public class TransportChannelHandler extends ChannelInboundHandlerAdapter {
     super.channelInactive(ctx);
   }
 
+  /**
+   * RequestMessage交给requestHandler处理,ResponseMessage交给responseHandler处理
+   * @param ctx
+   * @param request
+   * @throws Exception
+   */
   @Override
   public void channelRead(ChannelHandlerContext ctx, Object request) throws Exception {
     if (request instanceof RequestMessage) {

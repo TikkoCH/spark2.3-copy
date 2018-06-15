@@ -35,13 +35,14 @@ import org.apache.spark.network.util.LimitedInputStream;
 import org.apache.spark.network.util.TransportConf;
 
 /**
+ * 用来读取文件中的一小段
  * A {@link ManagedBuffer} backed by a segment in a file.
  */
 public final class FileSegmentManagedBuffer extends ManagedBuffer {
-  private final TransportConf conf;
-  private final File file;
-  private final long offset;
-  private final long length;
+  private final TransportConf conf; //就是transprot的配置
+  private final File file; //要读取的文件
+  private final long offset; //偏移量
+  private final long length; //长度
 
   public FileSegmentManagedBuffer(TransportConf conf, File file, long offset, long length) {
     this.conf = conf;
@@ -59,9 +60,11 @@ public final class FileSegmentManagedBuffer extends ManagedBuffer {
   public ByteBuffer nioByteBuffer() throws IOException {
     FileChannel channel = null;
     try {
+      //RandomAccessFile读取文件
       channel = new RandomAccessFile(file, "r").getChannel();
+      //如果缓冲区足够小,只需复制缓冲区,因为内存映射的开销很高
       // Just copy the buffer if it's sufficiently small, as memory mapping has a high overhead.
-      if (length < conf.memoryMapBytes()) {
+      if (length < conf.memoryMapBytes()) {//如果小于配置中的内存映射大小就复制缓冲区
         ByteBuffer buf = ByteBuffer.allocate((int) length);
         channel.position(offset);
         while (buf.remaining() != 0) {
@@ -73,7 +76,7 @@ public final class FileSegmentManagedBuffer extends ManagedBuffer {
         }
         buf.flip();
         return buf;
-      } else {
+      } else {//否则就内存映射模式
         return channel.map(FileChannel.MapMode.READ_ONLY, offset, length);
       }
     } catch (IOException e) {
@@ -92,6 +95,7 @@ public final class FileSegmentManagedBuffer extends ManagedBuffer {
     }
   }
 
+  //也很简单,就是用了google的一个工具包来跳过offset之前的流,最后返回offset到length长度的流
   @Override
   public InputStream createInputStream() throws IOException {
     FileInputStream is = null;

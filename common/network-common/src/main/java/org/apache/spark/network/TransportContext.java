@@ -169,16 +169,19 @@ public class TransportContext {
 
   /**
    *
-   *
+   *创建用于处理请求和响应信息的客户端和服务端handler.即使channel已经成功创建,
+   * 有些属性可能不能立即使用,如remoteAddress <br>
    * Creates the server- and client-side handler which is used to handle both RequestMessages and
    * ResponseMessages. The channel is expected to have been successfully created, though certain
    * properties (such as the remoteAddress()) may not be available yet.
    */
   private TransportChannelHandler createChannelHandler(Channel channel, RpcHandler rpcHandler) {
+    //创建了三个东西 responseHandler,requestHandler和transportClient
     TransportResponseHandler responseHandler = new TransportResponseHandler(channel);
     TransportClient client = new TransportClient(channel, responseHandler);
     TransportRequestHandler requestHandler = new TransportRequestHandler(channel, client,
       rpcHandler, conf.maxChunksBeingTransferred());
+    //根据上面创建的对象构造TransportChannelHandler
     return new TransportChannelHandler(client, responseHandler, requestHandler,
       conf.connectionTimeoutMs(), closeIdleConnections);
   }
