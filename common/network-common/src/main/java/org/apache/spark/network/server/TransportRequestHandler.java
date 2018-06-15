@@ -45,6 +45,10 @@ import org.apache.spark.network.protocol.StreamResponse;
 import static org.apache.spark.network.util.NettyUtils.getRemoteAddress;
 
 /**
+ *
+ * 处理来自客户端的请求并将块数据写回的处理程序.每个处理程序连接到一个Netty通道，
+ * 并跟踪哪些流通过此通道获取，以便在通道终止时清除它们.
+ * 这些消息应该由TransportServer通过管道设置进行处理.<br>
  * A handler that processes requests from clients and writes chunk data back. Each handler is
  * attached to a single Netty channel, and keeps track of which streams have been fetched via this
  * channel, in order to clean them up if the channel is terminated (see #channelUnregistered).
@@ -103,6 +107,7 @@ public class TransportRequestHandler extends MessageHandler<RequestMessage> {
     rpcHandler.channelInactive(reverseClient);
   }
 
+  //整个类的核心逻辑从这里开始,if判断不同Message类型的处理方式
   @Override
   public void handle(RequestMessage request) {
     if (request instanceof ChunkFetchRequest) {
@@ -118,12 +123,18 @@ public class TransportRequestHandler extends MessageHandler<RequestMessage> {
     }
   }
 
+  /**
+   * 如果是ChunkFetchRequest类型,则使用这个方法进行处理.
+   * @param req
+   */
   private void processFetchRequest(final ChunkFetchRequest req) {
     if (logger.isTraceEnabled()) {
       logger.trace("Received req from {} to fetch block {}", getRemoteAddress(channel),
         req.streamChunkId);
     }
+    //获取正在传输的块的数量
     long chunksBeingTransferred = streamManager.chunksBeingTransferred();
+    //如果大于等于本类中的属性maxChunksBeingTransferred,关闭channel.这可能是2.3新增的
     if (chunksBeingTransferred >= maxChunksBeingTransferred) {
       logger.warn("The number of chunks being transferred {} is above {}, close the connection.",
         chunksBeingTransferred, maxChunksBeingTransferred);
@@ -132,8 +143,11 @@ public class TransportRequestHandler extends MessageHandler<RequestMessage> {
     }
     ManagedBuffer buf;
     try {
+      //校验客户端是否有权限读取,没有权限抛出异常
       streamManager.checkAuthorization(reverseClient, req.streamChunkId.streamId);
+      //注册管道
       streamManager.registerChannel(channel, req.streamChunkId.streamId);
+      //获取单个数据块,被封装成了ManagedBuffer
       buf = streamManager.getChunk(req.streamChunkId.streamId, req.streamChunkId.chunkIndex);
     } catch (Exception e) {
       logger.error(String.format("Error opening block %s for request from %s",
@@ -141,19 +155,24 @@ public class TransportRequestHandler extends MessageHandler<RequestMessage> {
       respond(new ChunkFetchFailure(req.streamChunkId, Throwables.getStackTraceAsString(e)));
       return;
     }
-
+    //开始传送数据
     streamManager.chunkBeingSent(req.streamChunkId.streamId);
+    //流ID和ManagedBuffer封装成ChunkFetchSuccess返回给客户端,并且对respond返回的handler添加监听器
     respond(new ChunkFetchSuccess(req.streamChunkId, buf)).addListener(future -> {
       streamManager.chunkSent(req.streamChunkId.streamId);
     });
   }
 
+  /**
+   * 处理StreamRequest类型数据的方法
+   * @param req
+   */
   private void processStreamRequest(final StreamRequest req) {
     if (logger.isTraceEnabled()) {
       logger.trace("Received req from {} to fetch stream {}", getRemoteAddress(channel),
         req.streamId);
     }
-
+    //和上面方法逻辑大体相同
     long chunksBeingTransferred = streamManager.chunksBeingTransferred();
     if (chunksBeingTransferred >= maxChunksBeingTransferred) {
       logger.warn("The number of chunks being transferred {} is above {}, close the connection.",
@@ -162,6 +181,7 @@ public class TransportRequestHandler extends MessageHandler<RequestMessage> {
       return;
     }
     ManagedBuffer buf;
+    //获取流buf,封装成了ManagedBuffer
     try {
       buf = streamManager.openStream(req.streamId);
     } catch (Exception e) {
@@ -170,7 +190,7 @@ public class TransportRequestHandler extends MessageHandler<RequestMessage> {
       respond(new StreamFailure(req.streamId, Throwables.getStackTraceAsString(e)));
       return;
     }
-
+    //如果buf不等于空,封装StreamResponse(req.streamId, buf.size(), buf)返回给客户端,并为respond返回的handler添加监听
     if (buf != null) {
       streamManager.streamBeingSent(req.streamId);
       respond(new StreamResponse(req.streamId, buf.size(), buf)).addListener(future -> {

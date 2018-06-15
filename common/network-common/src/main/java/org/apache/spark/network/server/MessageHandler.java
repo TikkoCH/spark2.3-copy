@@ -43,7 +43,7 @@ public abstract class MessageHandler<T extends Message> {
    * Invoked when an exception was caught on the Channel. */
   public abstract void exceptionCaught(Throwable cause);
 
-  /** 
+  /**
    * 当本实例所在的channel是非活动状态时调用.<br>
    * Invoked when the channel this MessageHandler is on is inactive. */
   public abstract void channelInactive();

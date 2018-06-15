@@ -24,6 +24,7 @@ import org.apache.spark.network.buffer.ManagedBuffer;
 import org.apache.spark.network.buffer.NettyManagedBuffer;
 
 /**
+ * 如果chunk存在并且成功获取,对ChunkFetchRequest做出响应.
  * Response to {@link ChunkFetchRequest} when a chunk exists and has been successfully fetched.
  *
  * Note that the server-side encoding of this messages does NOT include the buffer itself, as this
