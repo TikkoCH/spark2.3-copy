@@ -28,30 +28,36 @@ import com.codahale.metrics.Timer
 import org.apache.spark.internal.Logging
 
 /**
- * An event bus which posts events to its listeners.
+ * 用来将事件推送给监听者
+  * An event bus which posts events to its listeners.
  */
 private[spark] trait ListenerBus[L <: AnyRef, E] extends Logging {
 
   private[this] val listenersPlusTimers = new CopyOnWriteArrayList[(L, Option[Timer])]
 
+  // 维护所有已注册的监听器的容器,数据结构是CopyOnWriteArrayList
   // Marked `private[spark]` for access in tests.
   private[spark] def listeners = listenersPlusTimers.asScala.map(_._1).asJava
 
   /**
-   * Returns a CodaHale metrics Timer for measuring the listener's event processing time.
+   *  返回用于计算监听器事件处理事件的Timer,这个Timer是metrics开源项目中的timer,
+    *  metrics是用于性能监视的一个开源项目.本方法需要被子类重写<br>
+    * Returns a CodaHale metrics Timer for measuring the listener's event processing time.
    * This method is intended to be overridden by subclasses.
    */
   protected def getTimer(listener: L): Option[Timer] = None
 
   /**
-   * Add a listener to listen events. This method is thread-safe and can be called in any thread.
+   * 添加监听器来监听事件.线程安全,原因:CopyOnWriteArrayList是线程安全的.<br>
+    * Add a listener to listen events. This method is thread-safe and can be called in any thread.
    */
   final def addListener(listener: L): Unit = {
     listenersPlusTimers.add((listener, getTimer(listener)))
   }
 
   /**
-   * Remove a listener and it won't receive any events. This method is thread-safe and can be called
+   * 删除监听器,并且不会再接收到事件.<br>
+    * Remove a listener and it won't receive any events. This method is thread-safe and can be called
    * in any thread.
    */
   final def removeListener(listener: L): Unit = {
