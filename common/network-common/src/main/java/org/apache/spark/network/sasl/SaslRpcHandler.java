@@ -82,6 +82,7 @@ public class SaslRpcHandler extends RpcHandler {
   @Override
   public void receive(TransportClient client, ByteBuffer message, RpcResponseCallback callback) {
     if (isComplete) {
+      //如果是已经完成,将消息传递给下游RpcHandler并返回
       // Authentication complete, delegate to base handler.
       delegate.receive(client, message, callback);
       return;
@@ -90,40 +91,49 @@ public class SaslRpcHandler extends RpcHandler {
       ByteBuf nettyBuf = Unpooled.wrappedBuffer(message);
       SaslMessage saslMessage;
       try {
-        saslMessage = SaslMessage.decode(nettyBuf);
+        saslMessage = SaslMessage.decode(nettyBuf);//解密数据
       } finally {
         nettyBuf.release();
       }
 
       if (saslServer == null) {
+        //如果saslServer还未创建,则创建SparkSaslServer
+        //握手中的第一条消息,设置必要的状态
         // First message in the handshake, setup the necessary state.
         client.setClientId(saslMessage.appId);
         saslServer = new SparkSaslServer(saslMessage.appId, secretKeyHolder,
           conf.saslServerAlwaysEncrypt());
       }
-
+      //声明响应的字节数组
       byte[] response;
       try {
+        //通过saslServer响应
         response = saslServer.response(JavaUtils.bufferToArray(
           saslMessage.body().nioByteBuffer()));
       } catch (IOException ioe) {
         throw new RuntimeException(ioe);
       }
-      callback.onSuccess(ByteBuffer.wrap(response));
+      callback.onSuccess(ByteBuffer.wrap(response));//返回给客户端
     }
 
+
+    // 在SASL响应发出之后设置加密,否则客户端无法解析响应.因为我们正在处理传入的消息,
+    // 所以在此修改channel pipeline是可以的.所以该pipeline处于忙碌状态,并且在方法返回之前,
+    // 不会有新消息传入pipeline之内.这需要代码通过其他方式确保在协商进行时没有出站消息正在写入channel.
     // Setup encryption after the SASL response is sent, otherwise the client can't parse the
     // response. It's ok to change the channel pipeline here since we are processing an incoming
     // message, so the pipeline is busy and no new incoming messages will be fed to it before this
     // method returns. This assumes that the code ensures, through other means, that no outbound
     // messages are being written to the channel while negotiation is still going on.
     if (saslServer.isComplete()) {
+      //QOP_AUTH_CONF=auth-conf;Sasl.QOP=javax.security.sasl.qop,这两个应该是一定相等的,因为都是final修饰的String
+      //我不太明白为什么在这里进行判断.如果不相等就设置complete为true,如果相等就设置false
       if (!SparkSaslServer.QOP_AUTH_CONF.equals(saslServer.getNegotiatedProperty(Sasl.QOP))) {
         logger.debug("SASL authentication successful for channel {}", client);
         complete(true);
         return;
       }
-
+      //对管道进行加密
       logger.debug("Enabling encryption for channel {}", client);
       SaslEncryption.addToChannel(channel, saslServer, conf.maxSaslEncryptedBlockSize());
       complete(false);

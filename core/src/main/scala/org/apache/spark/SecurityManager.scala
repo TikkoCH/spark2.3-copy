@@ -114,7 +114,7 @@ import org.apache.spark.util.Utils
  *
  *            The NettyBlockTransferService ensures that SASL authentication is performed
  *            synchronously prior to any other communication on a connection. This is done in
- *            SaslClientBootstrap on the client side and SaslRpcHandler on the server side.
+ *            SaslClientBootstrap on the client side and Sasl on the server side.
  *
  *  - HTTP for the Spark UI -> the UI was changed to use servlets so that javax servlet filters
  *            can be used. Yarn requires a specific AmIpFilter be installed for security to work

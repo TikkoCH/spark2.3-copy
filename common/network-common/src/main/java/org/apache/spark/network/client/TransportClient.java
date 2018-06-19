@@ -264,17 +264,20 @@ public class TransportClient implements Closeable {
   }
 
   /**
+   * 同步地发送非透明消息给服务端的RPChandler,一直阻塞到超时.
    * Synchronously sends an opaque message to the RpcHandler on the server-side, waiting for up to
    * a specified timeout for a response.
    */
   public ByteBuffer sendRpcSync(ByteBuffer message, long timeoutMs) {
+    //这是google的并发包中封装的future
     final SettableFuture<ByteBuffer> result = SettableFuture.create();
-
+    //重写了sendRpc方法
     sendRpc(message, new RpcResponseCallback() {
       @Override
       public void onSuccess(ByteBuffer response) {
         ByteBuffer copy = ByteBuffer.allocate(response.remaining());
         copy.put(response);
+        //Nio的缓冲区API:ByteBuffer.切换读写模式需要flip()
         // flip "copy" to make it readable
         copy.flip();
         result.set(copy);
@@ -287,6 +290,7 @@ public class TransportClient implements Closeable {
     });
 
     try {
+      //这个方法会一直阻塞,直到获得结果
       return result.get(timeoutMs, TimeUnit.MILLISECONDS);
     } catch (ExecutionException e) {
       throw Throwables.propagate(e.getCause());
@@ -296,6 +300,7 @@ public class TransportClient implements Closeable {
   }
 
   /**
+   * 发送非透明消息给服务端的RPChandler.无回复,无消息传递保证.OneWayMessage
    * Sends an opaque message to the RpcHandler on the server-side. No reply is expected for the
    * message, and no delivery guarantees are made.
    *
@@ -306,6 +311,7 @@ public class TransportClient implements Closeable {
   }
 
   /**
+   * 删除给定RPC的相关的所有状态
    * Removes any state associated with the given RPC.
    *
    * @param requestId The RPC id returned by {@link #sendRpc(ByteBuffer, RpcResponseCallback)}.
@@ -314,7 +320,9 @@ public class TransportClient implements Closeable {
     handler.removeRpcRequest(requestId);
   }
 
-  /** Mark this channel as having timed out. */
+  /**
+   * 标记该channel的超时属性为true
+   * Mark this channel as having timed out. */
   public void timeOut() {
     this.timedOut = true;
   }

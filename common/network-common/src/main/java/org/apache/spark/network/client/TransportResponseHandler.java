@@ -165,18 +165,20 @@ public class TransportResponseHandler extends MessageHandler<ResponseMessage> {
 
   @Override
   public void handle(ResponseMessage message) throws Exception {
+    //如果是ChunkFetchSuccess,进入下面这个case
     if (message instanceof ChunkFetchSuccess) {
       ChunkFetchSuccess resp = (ChunkFetchSuccess) message;
+      //根据streamChunkId获取callback
       ChunkReceivedCallback listener = outstandingFetches.get(resp.streamChunkId);
       if (listener == null) {
         logger.warn("Ignoring response for block {} from {} since it is not outstanding",
           resp.streamChunkId, getRemoteAddress(channel));
-        resp.body().release();
+        resp.body().release();//释放资源
       } else {
-        outstandingFetches.remove(resp.streamChunkId);
-        listener.onSuccess(resp.streamChunkId.chunkIndex, resp.body());
-        resp.body().release();
-      }
+        outstandingFetches.remove(resp.streamChunkId);//非空删除待处理容器中的streamChunkId
+        listener.onSuccess(resp.streamChunkId.chunkIndex, resp.body());//callback的成功方法
+        resp.body().release();//释放资源
+      }//其他的都类似,就不介绍
     } else if (message instanceof ChunkFetchFailure) {
       ChunkFetchFailure resp = (ChunkFetchFailure) message;
       ChunkReceivedCallback listener = outstandingFetches.get(resp.streamChunkId);
