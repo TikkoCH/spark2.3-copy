@@ -18,16 +18,19 @@
 package org.apache.spark.network.sasl;
 
 /**
+ * 获取应用关联的秘钥的接口<br>
  * Interface for getting a secret key associated with some application.
  */
 public interface SecretKeyHolder {
   /**
-   * Gets an appropriate SASL User for the given appId.
+   *根据指定的appId获取合适的SASL用户,如果appId没有与SASL用户关联,抛出异常<br>
+   *  Gets an appropriate SASL User for the given appId.
    * @throws IllegalArgumentException if the given appId is not associated with a SASL user.
    */
   String getSaslUser(String appId);
 
   /**
+   * 根据指定的appId获取合适的SASL密码.如果appId没有与SASL用户关联,抛出异常<br>
    * Gets an appropriate SASL secret key for the given appId.
    * @throws IllegalArgumentException if the given appId is not associated with a SASL secret key.
    */

@@ -30,7 +30,9 @@ import org.apache.spark.network.util.TransportConf;
  */
 public class SaslServerBootstrap implements TransportServerBootstrap {
 
+  //配置信息
   private final TransportConf conf;
+  //
   private final SecretKeyHolder secretKeyHolder;
 
   public SaslServerBootstrap(TransportConf conf, SecretKeyHolder secretKeyHolder) {
@@ -39,6 +41,7 @@ public class SaslServerBootstrap implements TransportServerBootstrap {
   }
 
   /**
+   * 将应用的handler包装成SaslRpcHandler,会用来初始化SASL连接.
    * Wrap the given application handler in a SaslRpcHandler that will handle the initial SASL
    * negotiation.
    */

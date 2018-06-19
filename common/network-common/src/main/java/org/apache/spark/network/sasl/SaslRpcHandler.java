@@ -35,6 +35,8 @@ import org.apache.spark.network.util.JavaUtils;
 import org.apache.spark.network.util.TransportConf;
 
 /**
+ * 在委托给一个子RPChandler之前会进行SASL权限验证,只有在指定连接验证成功之后委托才能收到消息.
+ * 连接最多可验证一次.注意:验证过程包含多个质询响应对,每一个都是一个远程过程调用.<br>
  * RPC Handler which performs SASL authentication before delegating to a child RPC handler.
  * The delegate will only receive messages if the given connection has been successfully
  * authenticated. A connection may be authenticated at most once.
@@ -45,16 +47,18 @@ import org.apache.spark.network.util.TransportConf;
 public class SaslRpcHandler extends RpcHandler {
   private static final Logger logger = LoggerFactory.getLogger(SaslRpcHandler.class);
 
-  /** Transport configuration. */
+  /** Transport的配置信息.Transport configuration. */
   private final TransportConf conf;
 
-  /** The client channel. */
+  /** 客户端channel.The client channel. */
   private final Channel channel;
 
-  /** RpcHandler we will delegate to for authenticated connections. */
+  /**建立验证连接之后想要委托的RPChandler RpcHandler we will delegate to for authenticated connections. */
   private final RpcHandler delegate;
 
-  /** Class which provides secret keys which are shared by server and client on a per-app basis. */
+  /**
+   *提供密钥的类，这些密钥由服务器和客户端在每个应用程序的基础上共享<br>
+   * Class which provides secret keys which are shared by server and client on a per-app basis. */
   private final SecretKeyHolder secretKeyHolder;
 
   private SparkSaslServer saslServer;

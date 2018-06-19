@@ -35,9 +35,12 @@ import org.apache.spark.metrics.MetricsSystem
 import org.apache.spark.metrics.source.Source
 
 /**
- * Asynchronously passes SparkListenerEvents to registered SparkListeners.
+ * 异步地将Spark监听事件传递给已经注册的Spark监听器(rpc框架中的角色).在调用`start()`方法之前,
+  *   所有发布的事件只在缓存中.只用当这个"监听器大巴"启动(start方法),所有的事件
+  *     才真正传播给监听者.当调用stop方法之后,之后的事件会被放弃.<br>
+  *  Asynchronously passes SparkListenerEvents to registered SparkListeners.
  *
- * Until `start()` is called, all posted events are only buffered. Only after this listener bus
+ * Until start()` is called, all posted events are only buffered. Only after this listener bus
  * has started will events be actually propagated to all attached listeners. This listener bus
  * is stopped when `stop()` is called, and it will drop further events after stopping.
  */
