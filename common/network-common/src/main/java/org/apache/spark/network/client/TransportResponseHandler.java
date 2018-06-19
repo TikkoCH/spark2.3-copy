@@ -81,6 +81,12 @@ public class TransportResponseHandler extends MessageHandler<ResponseMessage> {
     outstandingFetches.remove(streamChunkId);
   }
 
+
+  /**
+   * 这个方法更新了最后请求时间,并且将requestId和callback放进outstandingRpcs(未解决的rpc集合,相当于一个缓存).
+   * @param requestId
+   * @param callback
+   */
   public void addRpcRequest(long requestId, RpcResponseCallback callback) {
     updateTimeOfLastRequest();
     outstandingRpcs.put(requestId, callback);

@@ -40,6 +40,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
+ *
+ * Spark的SASL服务端,实时追踪一个SASL会话的状态,从initial状态直到authenticated状态.
+ * 这不是那种接受socket连接的服务端.<br>
  * A SASL Server for Spark which simply keeps track of the state of a single SASL session, from the
  * initial state to the "authenticated" state. (It is not a server in the sense of accepting
  * connections on some socket.)
@@ -48,28 +51,34 @@ public class SparkSaslServer implements SaslEncryptionBackend {
   private static final Logger logger = LoggerFactory.getLogger(SparkSaslServer.class);
 
   /**
+   * 在创建sasl客户端或服务端时这被当做服务端名称传送.将来可能改成可配置的<br>
    * This is passed as the server name when creating the sasl client/server.
    * This could be changed to be configurable in the future.
    */
   static final String DEFAULT_REALM = "default";
 
   /**
+   * 这里使用的验证机制是DIGEST-MD5.将来可能变成可配置的.<br>
    * The authentication mechanism used here is DIGEST-MD5. This could be changed to be
    * configurable in the future.
    */
   static final String DIGEST = "DIGEST-MD5";
 
   /**
+   * qop包含加密
    * Quality of protection value that includes encryption.
    */
   static final String QOP_AUTH_CONF = "auth-conf";
 
   /**
+   * qop不包含加密
    * Quality of protection value that does not include encryption.
    */
   static final String QOP_AUTH = "auth";
 
-  /** Identifier for a certain secret key within the secretKeyHolder. */
+  /**
+   * secretKeyHolder中的某个密钥的标识符<br>
+   * Identifier for a certain secret key within the secretKeyHolder. */
   private final String secretKeyId;
   private final SecretKeyHolder secretKeyHolder;
   private SaslServer saslServer;
@@ -81,6 +90,7 @@ public class SparkSaslServer implements SaslEncryptionBackend {
     this.secretKeyId = secretKeyId;
     this.secretKeyHolder = secretKeyHolder;
 
+    //Sasl.QOP是一个逗号分隔的支持值列表。 允许加密的值首先列出，因为它优先于未加密的值（如果客户端也在请求中列出）。
     // Sasl.QOP is a comma-separated list of supported values. The value that allows encryption
     // is listed first since it's preferred over the non-encrypted one (if the client also
     // lists both in the request).
@@ -98,6 +108,7 @@ public class SparkSaslServer implements SaslEncryptionBackend {
   }
 
   /**
+   * 确定验证交换是否已经成功.
    * Determines whether the authentication exchange has completed successfully.
    */
   public synchronized boolean isComplete() {

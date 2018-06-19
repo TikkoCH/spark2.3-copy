@@ -44,6 +44,13 @@ import org.apache.spark.network.protocol.StreamRequest;
 import static org.apache.spark.network.util.NettyUtils.getRemoteAddress;
 
 /**
+ * 客户端用来获取之前确定的流的连续数据块.这个API用于提高大体量数据的传输效率,将其分解成几百k到几兆的数据.
+ * 注意当客户端从流中获取数据块时,实际的流的设置是在传输层之外完成的.`sendRPC`方法可以控制客户端和服务端
+ * 之间的平面通信来对此设置<br>
+ * 可以通过TransportClientFactory创建TransportClient实例.一个传输客户端可以用于多个流，
+ * 但是任何给定的流必须被限制为单个客户端，以避免乱序响应。此类用于向服务器发送请求，而TransportResponseHandler
+ * 负责处理来自服务器的响应。
+ * 线程安全,可被多个线程调用<br>
  * Client for fetching consecutive chunks of a pre-negotiated stream. This API is intended to allow
  * efficient transfer of a large amount of data, broken up into chunks with size ranging from
  * hundreds of KB to a few MB.
@@ -96,6 +103,7 @@ public class TransportClient implements Closeable {
   }
 
   /**
+   * 验证可用时,返回客户端用来验证自身的id.如果验证不可用返回null.<br>
    * Returns the ID used by the client to authenticate itself when authentication is enabled.
    *
    * @return The client ID, or null if authentication is disabled.
@@ -105,6 +113,7 @@ public class TransportClient implements Closeable {
   }
 
   /**
+   * 设置验证过的ID,身份验证会使用这个.尝试设置额外的clientID会抛出异常.<br>
    * Sets the authenticated client ID. This is meant to be used by the authentication layer.
    *
    * Trying to set a different client ID after it's been set will result in an exception.
@@ -115,6 +124,10 @@ public class TransportClient implements Closeable {
   }
 
   /**
+   *
+   * 根据之前获得的streamId向远程请求单个数据块.块索引从0开始,对单个数据块请求多次也是可以的,
+   * 但是有些流不支持这种操作.多个fetchChunk可能同时请求,但是可以保证按照请求顺序返回,这种情况
+   * 建立在假设只有一个TransportClient用来获取数据块.<br>
    * Requests a single chunk from the remote side, from the pre-negotiated streamId.
    *
    * Chunk indices go from 0 onwards. It is valid to request the same chunk multiple times, though
@@ -137,10 +150,11 @@ public class TransportClient implements Closeable {
     if (logger.isDebugEnabled()) {
       logger.debug("Sending fetch chunk request {} to {}", chunkIndex, getRemoteAddress(channel));
     }
-
+    //创建一个StreamChunkId对象
     StreamChunkId streamChunkId = new StreamChunkId(streamId, chunkIndex);
+    //在handler中添加fetch请求
     handler.addFetchRequest(streamChunkId, callback);
-
+    //writeAndFlush就是将数据写出了,写出的是streamChunkId对象,并且添加了listener.对成功和失败进行处理.
     channel.writeAndFlush(new ChunkFetchRequest(streamChunkId)).addListener(future -> {
       if (future.isSuccess()) {
         long timeTaken = System.currentTimeMillis() - startTime;
@@ -164,7 +178,8 @@ public class TransportClient implements Closeable {
   }
 
   /**
-   * Request to stream the data with the given stream ID from the remote end.
+   *  根据streamID请求远端流数据
+   *  Request to stream the data with the given stream ID from the remote end.
    *
    * @param streamId The stream to fetch.
    * @param callback Object to call with the stream data.
@@ -174,7 +189,7 @@ public class TransportClient implements Closeable {
     if (logger.isDebugEnabled()) {
       logger.debug("Sending stream request for {} to {}", streamId, getRemoteAddress(channel));
     }
-
+    // 这里需要同步保证回调被添加到队列和RPC被写进socket是原子性的,而且这样能保证响应到达时回调的调用顺序是正确的
     // Need to synchronize here so that the callback is added to the queue and the RPC is
     // written to the socket atomically, so that callbacks are called in the right order
     // when responses arrive.
@@ -203,6 +218,7 @@ public class TransportClient implements Closeable {
   }
 
   /**
+   * 发送不透明的消息给服务端的RpcHandler.当服务端响应或失败时回调会调用.
    * Sends an opaque message to the RpcHandler on the server-side. The callback will be invoked
    * with the server's response or upon any failure.
    *
@@ -215,13 +231,15 @@ public class TransportClient implements Closeable {
     if (logger.isTraceEnabled()) {
       logger.trace("Sending RPC to {}", getRemoteAddress(channel));
     }
-
+    //生成一个正数uuid.
     long requestId = Math.abs(UUID.randomUUID().getLeastSignificantBits());
+    //在handler中添加请求.
     handler.addRpcRequest(requestId, callback);
-
+    //发送RPC请求,请求包含了requestId,和NioManagedBuffer包装的message,添加监听,对响应结果做处理.
     channel.writeAndFlush(new RpcRequest(requestId, new NioManagedBuffer(message)))
         .addListener(future -> {
           if (future.isSuccess()) {
+            //如果发送成功,只记录下日志
             long timeTaken = System.currentTimeMillis() - startTime;
             if (logger.isTraceEnabled()) {
               logger.trace("Sending request {} to {} took {} ms", requestId,
@@ -231,6 +249,7 @@ public class TransportClient implements Closeable {
             String errorMsg = String.format("Failed to send RPC %s to %s: %s", requestId,
               getRemoteAddress(channel), future.cause());
             logger.error(errorMsg, future.cause());
+            //如果发送失败,除了打印日志还会删除handler中的缓存.
             handler.removeRpcRequest(requestId);
             channel.close();
             try {
