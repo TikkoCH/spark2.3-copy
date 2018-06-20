@@ -1454,47 +1454,54 @@ private[spark] object Utils extends Logging {
   }
 
   /**
-   * When called inside a class in the spark package, returns the name of the user code class
+   * 在spark包中的类内调用时，返回调用到Spark中的用户代码类（在Spark包外部）的名称以及它们调用的Spark方法。
+    * 例如，这用于告诉用户在其代码中每个RDD创建的位置。<br>
+    * When called inside a class in the spark package, returns the name of the user code class
    * (outside the spark package) that called into Spark, as well as which Spark method they called.
    * This is used, for example, to tell users where in their code each RDD got created.
    *
-   * @param skipClass Function that is used to exclude non-user-code classes.
+   * @param skipClass 用于排除非用户代码的函数.Function that is used to exclude non-user-code classes.
    */
   def getCallSite(skipClass: String => Boolean = sparkInternalExclusionFunction): CallSite = {
+    //遍历堆栈信息,找到第一个非Spark包中的方法.然后持续追踪站底的spark方法.可能是RDD的转换,SparkContext的函数,
+    //或者其他会引发初始化RDD的函数.我们还会追踪栈顶的用户方法,文件,和行号.
     // Keep crawling up the stack trace until we find the first function not inside of the spark
     // package. We track the last (shallowest) contiguous Spark method. This might be an RDD
     // transformation, a SparkContext function (such as parallelize), or anything else that leads
     // to instantiation of an RDD. We also track the first (deepest) user method, file, and line.
-    var lastSparkMethod = "<unknown>"
-    var firstUserFile = "<unknown>"
-    var firstUserLine = 0
-    var insideSpark = true
-    val callStack = new ArrayBuffer[String]() :+ "<unknown>"
+    var lastSparkMethod = "<unknown>" //栈底Spark方法
+    var firstUserFile = "<unknown>"  //栈顶UserFile
+    var firstUserLine = 0             //栈顶用户行号
+    var insideSpark = true            //是否于Spark内
+    val callStack = new ArrayBuffer[String]() :+ "<unknown>" //
 
     Thread.currentThread.getStackTrace().foreach { ste: StackTraceElement =>
+      // 在某些分析器下运行时,当前堆栈信息可能包含一些我们无法解析的框架.为了确保不会崩溃,
+      // 遇到无法解析的框架,忽略即可.
       // When running under some profilers, the current stack trace might contain some bogus
       // frames. This is intended to ensure that we don't crash in these situations by
       // ignoring any frames that we can't examine.
       if (ste != null && ste.getMethodName != null
         && !ste.getMethodName.contains("getStackTrace")) {
-        if (insideSpark) {
-          if (skipClass(ste.getClassName)) {
+        if (insideSpark) {//
+          if (skipClass(ste.getClassName)) {//如果我们传进的函数对于当前栈帧中的类名的返回结果是true
             lastSparkMethod = if (ste.getMethodName == "<init>") {
               // Spark method is a constructor; get its class name
+              // Spark方法是一个构造器,获取其类名
               ste.getClassName.substring(ste.getClassName.lastIndexOf('.') + 1)
             } else {
-              ste.getMethodName
+              ste.getMethodName//否则获取方法名
             }
             callStack(0) = ste.toString // Put last Spark method on top of the stack trace.
           } else {
             if (ste.getFileName != null) {
-              firstUserFile = ste.getFileName
+              firstUserFile = ste.getFileName  //如果文件名不为空,设置值
               if (ste.getLineNumber >= 0) {
-                firstUserLine = ste.getLineNumber
+                firstUserLine = ste.getLineNumber //如果行号大于0,设置行号
               }
             }
-            callStack += ste.toString
-            insideSpark = false
+            callStack += ste.toString //toString方法会拿取类名+方法名+行号+文件名.
+            insideSpark = false  //设置为false就不会再进入这个case中了.
           }
         } else {
           callStack += ste.toString
@@ -1506,14 +1513,14 @@ private[spark] object Utils extends Logging {
     val shortForm =
       if (firstUserFile == "HiveSessionImpl.java") {
         // To be more user friendly, show a nicer string for queries submitted from the JDBC
-        // server.
+        // server.为了更方便用户使用，请为JDBC服务器提交的查询显示一个更好的字符串。
         "Spark JDBC Server Query"
       } else {
         s"$lastSparkMethod at $firstUserFile:$firstUserLine"
       }
-    val longForm = callStack.take(callStackDepth).mkString("\n")
+    val longForm = callStack.take(callStackDepth).mkString("\n") //shortForm是简短描述.Longform是完整描述
 
-    CallSite(shortForm, longForm)
+    CallSite(shortForm, longForm)//将构造的CallSite返回.
   }
 
   private val UNCOMPRESSED_LOG_FILE_LENGTH_CACHE_SIZE_CONF =

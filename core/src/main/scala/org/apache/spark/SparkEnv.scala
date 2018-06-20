@@ -44,7 +44,9 @@ import org.apache.spark.storage._
 import org.apache.spark.util.{RpcUtils, Utils}
 
 /**
- * :: DeveloperApi ::
+ * spark运行时环境.包括serializer, RpcEnv, block manager, map output tracker等等.
+  * Spark的用户代码通过全局变量找到SaprkEnv,所以多线程间共享相同的SparkEnv.可以通过SparkEnv.get来获取SparkEnv
+  * :: DeveloperApi ::
  * Holds all the runtime environment objects for a running Spark instance (either master or worker),
  * including the serializer, RpcEnv, block manager, map output tracker, etc. Currently
  * Spark code finds the SparkEnv through a global variable, so all the threads can access the same

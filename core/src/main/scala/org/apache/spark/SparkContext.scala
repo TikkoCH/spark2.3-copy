@@ -58,35 +58,40 @@ import org.apache.spark.storage._
 import org.apache.spark.storage.BlockManagerMessages.TriggerThreadDump
 import org.apache.spark.ui.{ConsoleProgressBar, SparkUI}
 import org.apache.spark.util._
-
+// scalastyle:off
 /**
- * Main entry point for Spark functionality. A SparkContext represents the connection to a Spark
+ * Spark功能的主要入口.一个SparkContext代表一个Spark集群的连接,并且可以用来在集群上创建RDD,累加器和广播变量.
+  * 每个JVM只有一个活动的SparkContext,在创建一个新的SparkContext之前需要调用`stop()`方法结束活动的SparkContext.<br>
+  * Main entry point for Spark functionality. A SparkContext represents the connection to a Spark
  * cluster, and can be used to create RDDs, accumulators and broadcast variables on that cluster.
  *
  * Only one SparkContext may be active per JVM.  You must `stop()` the active SparkContext before
  * creating a new one.  This limitation may eventually be removed; see SPARK-2243 for more details.
  *
- * @param config a Spark Config object describing the application configuration. Any settings in
+ * @param config sparkConf用来描述应用的配置.该参数中的任何设置会覆盖系统的配置文件.
+  *  a Spark Config object describing the application configuration. Any settings in
  *   this config overrides the default configs as well as system properties.
  */
 class SparkContext(config: SparkConf) extends Logging {
 
   // The call site where this SparkContext was constructed.
-  private val creationSite: CallSite = Utils.getCallSite()
+  private val creationSite: CallSite = Utils.getCallSite()//里有用户代码的信息和Spark内部的核心类信息.
 
   // If true, log warnings instead of throwing exceptions when multiple SparkContexts are active
+  //是否允许多个SparkContex实例,如果是true,创建多个时会记录warning日志但不会抛出异常.
   private val allowMultipleContexts: Boolean =
     config.getBoolean("spark.driver.allowMultipleContexts", false)
 
+  // 为了防止多个SparkContexts同时处于活动状态，请将此上下文标记为已开始构建。这必须放在SparkContext构造函数开头
   // In order to prevent multiple SparkContexts from being active at the same time, mark this
   // context as having started construction.
   // NOTE: this must be placed at the beginning of the SparkContext constructor.
   SparkContext.markPartiallyConstructed(this, allowMultipleContexts)
 
-  val startTime = System.currentTimeMillis()
+  val startTime = System.currentTimeMillis()//SparkContext的启动时间
 
-  private[spark] val stopped: AtomicBoolean = new AtomicBoolean(false)
-
+  private[spark] val stopped: AtomicBoolean = new AtomicBoolean(false)//标记SparkContext是否停止.
+  //断言是否没有停止
   private[spark] def assertNotStopped(): Unit = {
     if (stopped.get()) {
       val activeContext = SparkContext.activeContext.get()
@@ -110,7 +115,8 @@ class SparkContext(config: SparkConf) extends Logging {
   }
 
   /**
-   * Create a SparkContext that loads settings from system properties (for instance, when
+   * 加载系统配置创建SparkContext(例如通过./bin/spark-submit调用)
+    * Create a SparkContext that loads settings from system properties (for instance, when
    * launching with ./bin/spark-submit).
    */
   def this() = this(new SparkConf())
@@ -187,28 +193,39 @@ class SparkContext(config: SparkConf) extends Logging {
    | of them to some neutral value ahead of time, so that calling "stop()" while the       |
    | constructor is still running is safe.                                                 |
    * ------------------------------------------------------------------------------------- */
-
+  //Spark的配置信息,SparkConf.clone获得的克隆体.SparkContext初始化的时候会校验conf
   private var _conf: SparkConf = _
+  //事件日志的路径.saprk.eventLog.enabled设置为true时启用.默认路径/tmp/spark-events.可通过spark.eventLog.dir指定.
   private var _eventLogDir: Option[URI] = None
+  //事件日志压缩算法.saprk.eventLog.enabled和spark.eventLog.compress均为true时启用.默认算法lz4.
+  //可以通过spark.io.compression.codec属性指定.目前支持lzf,snappy和lz4
   private var _eventLogCodec: Option[String] = None
+  //就是消息总线
   private var _listenerBus: LiveListenerBus = _
   private var _env: SparkEnv = _
   private var _statusTracker: SparkStatusTracker = _
   private var _progressBar: Option[ConsoleProgressBar] = None
   private var _ui: Option[SparkUI] = None
+  //Hadoop的配置,如果系统属性或环境变量的SPARK_YARN_MODE=true,则该配置是yarn的配置
   private var _hadoopConfiguration: Configuration = _
+  //executor的内存大小,默认是1024m.优先顺序:spark.executor.memory>SAPRK_EXECUTOR_MEMORY
   private var _executorMemory: Int = _
   private var _schedulerBackend: SchedulerBackend = _
   private var _taskScheduler: TaskScheduler = _
   private var _heartbeatReceiver: RpcEndpointRef = _
   @volatile private var _dagScheduler: DAGScheduler = _
+  //当前应用的标识,TaskSchedule启动会创建这个.由TaskSchedule的applicationId方法创建.
   private var _applicationId: String = _
+  //当前程序尝试执行的标识.Driver会多次尝试执行,每次都会生成一个id代表应用身份
   private var _applicationAttemptId: Option[String] = None
   private var _eventLogger: Option[EventLoggingListener] = None
   private var _executorAllocationManager: Option[ExecutorAllocationManager] = None
   private var _cleaner: Option[ContextCleaner] = None
+  // 标记LiveListenerBus是否已经启动
   private var _listenerBusStarted: Boolean = false
+  //用户设置的jar文件.当部署模式是yarn的时候,_jars是spark.jar属性指定的jar文件和Spark.yarn.dist.jars属性指定的文件的并集.
   private var _jars: Seq[String] = _
+  //用户设置的文件.可以使用spark.files指定
   private var _files: Seq[String] = _
   private var _shutdownHookRef: AnyRef = _
   private var _statusStore: AppStatusStore = _
@@ -259,10 +276,11 @@ class SparkContext(config: SparkConf) extends Logging {
   private[spark] def env: SparkEnv = _env
 
   // Used to store a URL for each static file/jar together with the file's local timestamp
+  // 用于保存每个本地文件/jar和将文件/jar添加到下面集合中的时间戳映射("文件名"/"jar"-->时间戳).
   private[spark] val addedFiles = new ConcurrentHashMap[String, Long]().asScala
   private[spark] val addedJars = new ConcurrentHashMap[String, Long]().asScala
 
-  // Keeps track of all persisted RDDs
+  // Keeps track of all persisted RDDs 跟踪所有持久化的RDD.
   private[spark] val persistentRdds = {
     val map: ConcurrentMap[Int, RDD[_]] = new MapMaker().weakValues().makeMap[Int, RDD[_]]()
     map.asScala
@@ -285,10 +303,10 @@ class SparkContext(config: SparkConf) extends Logging {
 
   private[spark] def executorMemory: Int = _executorMemory
 
-  // Environment variables to pass to our executors.
+  // Environment variables to pass to our executors.用于存储需要传递给executor的环境变量
   private[spark] val executorEnvs = HashMap[String, String]()
 
-  // Set SPARK_USER for user who is running SparkContext.
+  // Set SPARK_USER for user who is running SparkContext.运行spark的用户
   val sparkUser = Utils.getCurrentUserName()
 
   private[spark] def schedulerBackend: SchedulerBackend = _schedulerBackend
@@ -322,9 +340,10 @@ class SparkContext(config: SparkConf) extends Logging {
 
   private[spark] def cleaner: Option[ContextCleaner] = _cleaner
 
-  private[spark] var checkpointDir: Option[String] = None
+  private[spark] var checkpointDir: Option[String] = None //这个适用于存储检查点的目录
 
   // Thread Local variable that can be used by users to pass information down the stack
+  // 有InheritableThreadLocal维护的本地线程变量,其中的属性值可以沿线程向下传递
   protected[spark] val localProperties = new InheritableThreadLocal[Properties] {
     override protected def childValue(parent: Properties): Properties = {
       // Note: make a clone such that changes in the parent properties aren't reflected in
@@ -2332,11 +2351,11 @@ class SparkContext(config: SparkConf) extends Logging {
    * The reasons for this are discussed in https://github.com/mesos/spark/pull/718
    */
   def defaultMinPartitions: Int = math.min(defaultParallelism, 2)
-
+  //用于生成下一个Shuffle的身份标识
   private val nextShuffleId = new AtomicInteger(0)
 
   private[spark] def newShuffleId(): Int = nextShuffleId.getAndIncrement()
-
+  //用于生成下一个RDD的标识
   private val nextRddId = new AtomicInteger(0)
 
   /**
