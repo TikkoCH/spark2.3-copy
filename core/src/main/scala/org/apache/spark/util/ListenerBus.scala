@@ -26,7 +26,7 @@ import scala.util.control.NonFatal
 import com.codahale.metrics.Timer
 
 import org.apache.spark.internal.Logging
-
+// scalastyle:off
 /**
  * 用来将事件推送给监听者
   * An event bus which posts events to its listeners.
@@ -67,10 +67,15 @@ private[spark] trait ListenerBus[L <: AnyRef, E] extends Logging {
   }
 
   /**
-   * Post the event to all registered listeners. The `postToAll` caller should guarantee calling
+   *
+    * 将事件传递给所有已注册的监听者.调用者需要确保对于所有事件在相同线程中调用该方法.
+    * 虽然copyOnWriteArrayList是线程安全的,但是该方法先检查后执行,所以并不是线程安全的.
+    * Post the event to all registered listeners. The `postToAll` caller should guarantee calling
    * `postToAll` in the same thread for all events.
    */
   def postToAll(event: E): Unit = {
+    // 如果使用asScala方法,JavaConverters可以创建JIterableWrapper
+    // 由于本方法会经常被调用,为了避免wrapper的开销,我们直接使用Java的Iterator
     // JavaConverters can create a JIterableWrapper if we use asScala.
     // However, this method will be called frequently. To avoid the wrapper cost, here we use
     // Java Iterator directly.
@@ -98,14 +103,19 @@ private[spark] trait ListenerBus[L <: AnyRef, E] extends Logging {
   }
 
   /**
-   * Post an event to the specified listener. `onPostEvent` is guaranteed to be called in the same
+   * 对特定监听者发送事件.调用者需要确保对于所有事件在相同线程中调用该方法
+    * Post an event to the specified listener. `onPostEvent` is guaranteed to be called in the same
    * thread for all listeners.
    */
   protected def doPostEvent(listener: L, event: E): Unit
 
+  /**
+    * 查找指定类型的Listener列表
+    * @tparam T
+    * @return
+    */
   private[spark] def findListenersByClass[T <: L : ClassTag](): Seq[T] = {
     val c = implicitly[ClassTag[T]].runtimeClass
     listeners.asScala.filter(_.getClass == c).map(_.asInstanceOf[T]).toSeq
   }
-
 }
