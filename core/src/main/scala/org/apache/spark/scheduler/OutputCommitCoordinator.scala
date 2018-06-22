@@ -30,7 +30,12 @@ private case object StopCoordinator extends OutputCommitCoordinationMessage
 private case class AskPermissionToCommitOutput(stage: Int, partition: Int, attemptNumber: Int)
 
 /**
- * Authority that decides whether tasks can commit output to HDFS. Uses a "first committer wins"
+ *
+  * 确定任务是否可以把输出提到到HFDS的管理者。 使用先提交者胜的策略。
+  * 在driver 端和执行器端都要初始化OutputCommitCoordinator。
+  * 在执行器端，有一个指向driver 端OutputCommitCoordinatorEndpoing对象的引用，
+  * 所以提交输出的请求到被转发到driver端的OutputCommitCoordinator.
+  * Authority that decides whether tasks can commit output to HDFS. Uses a "first committer wins"
  * policy.
  *
  * OutputCommitCoordinator is instantiated in both the drivers and executors. On executors, it is
@@ -42,7 +47,7 @@ private case class AskPermissionToCommitOutput(stage: Int, partition: Int, attem
  */
 private[spark] class OutputCommitCoordinator(conf: SparkConf, isDriver: Boolean) extends Logging {
 
-  // Initialized by SparkEnv
+  // Initialized by SparkEnv 初始化SparkEnv
   var coordinatorRef: Option[RpcEndpointRef] = None
 
   private type StageId = Int

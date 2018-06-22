@@ -264,7 +264,7 @@ class SparkContext(config: SparkConf) extends Logging {
 
   // An asynchronous listener bus for Spark events
   private[spark] def listenerBus: LiveListenerBus = _listenerBus
-
+  //
   // This function allows components created by SparkEnv to be mocked in unit tests:
   private[spark] def createSparkEnv(
       conf: SparkConf,
@@ -431,7 +431,7 @@ class SparkContext(config: SparkConf) extends Logging {
       }
     }
 
-    _listenerBus = new LiveListenerBus(_conf)
+    _listenerBus = new LiveListenerBus(_conf) //因为SparkEnv中很多组件都要向ListenerBus中投递消息,所以先创建这个
 
     // Initialize the app status store and listener before SparkEnv is created so that it gets
     // all events.
@@ -439,8 +439,8 @@ class SparkContext(config: SparkConf) extends Logging {
     listenerBus.addToStatusQueue(_statusStore.listener.get)
 
     // Create the Spark execution environment (cache, map output tracker, etc)
-    _env = createSparkEnv(_conf, isLocal, listenerBus)
-    SparkEnv.set(_env)
+    _env = createSparkEnv(_conf, isLocal, listenerBus)//再创建Spark执行环境
+    SparkEnv.set(_env)//将其放入伴生对象中的属性,获取时可以通过静态方法get直接获取
 
     // If running the REPL, register the repl's output dir with the file server.
     _conf.getOption("spark.repl.class.outputDir").foreach { path =>
@@ -507,7 +507,7 @@ class SparkContext(config: SparkConf) extends Logging {
     _heartbeatReceiver = env.rpcEnv.setupEndpoint(
       HeartbeatReceiver.ENDPOINT_NAME, new HeartbeatReceiver(this))
 
-    // Create and start the scheduler
+    // Create and start the scheduler 创建TaskScheduler和dagScheduler
     val (sched, ts) = SparkContext.createTaskScheduler(this, master, deployMode)
     _schedulerBackend = sched
     _taskScheduler = ts

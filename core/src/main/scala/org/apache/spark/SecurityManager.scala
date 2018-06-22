@@ -36,7 +36,13 @@ import org.apache.spark.network.sasl.SecretKeyHolder
 import org.apache.spark.util.Utils
 
 /**
- * Spark class responsible for security.
+ * 负责spark安全的类.通常情况下,该类通过SparkEnv实例化,并且其他组件通过SparkEnv访问他.
+  * 但是也有一些情况是SparkEnv未初始化之前需要之间实例化本类.
+  * Spark目前通过共享的秘密支持身份验证.可以通过spark.authenticate参数来设置验证参数.
+  * 此参数控制Spark通信协议是否使用共享密钥进行身份验证.该验证通过握手确定双方秘钥相同然后允许通信.
+  * Spark的UI也可以通过使用servlet的filter来确保通信.
+  *
+  * Spark class responsible for security.
  *
  * In general this class should be instantiated by the SparkEnv and most components
  * should access it from that. There are some cases where the SparkEnv hasn't been
