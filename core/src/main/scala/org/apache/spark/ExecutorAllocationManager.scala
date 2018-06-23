@@ -121,7 +121,7 @@ private[spark] class ExecutorAllocationManager(
 
   // Number of executors to add in the next round
   private var numExecutorsToAdd = 1
-
+  // 此时想要的executor数量.如果我们所有的executor都死了,这就是想从集群中获取executor的数量.
   // The desired number of executors at this moment in time. If all our executors were to die, this
   // is the number of executors we would immediately want from the cluster manager.
   private var numExecutorsTarget = initialNumExecutors
@@ -220,12 +220,13 @@ private[spark] class ExecutorAllocationManager(
   }
 
   /**
-   * Register for scheduler callbacks to decide when to add and remove executors, and start
+   *  注册调度器的回调来决定合适添加删除executor,并且启动调度任务.
+    * Register for scheduler callbacks to decide when to add and remove executors, and start
    * the scheduling task.
    */
   def start(): Unit = {
-    listenerBus.addToManagementQueue(listener)
-
+    listenerBus.addToManagementQueue(listener)  // 向事件总线添加executorAllocationManager
+    //
     val scheduleTask = new Runnable() {
       override def run(): Unit = {
         try {
@@ -238,8 +239,9 @@ private[spark] class ExecutorAllocationManager(
         }
       }
     }
+    // 将scheduleTask提交给executor,这个intervalMillis是100,上面定义的.
     executor.scheduleWithFixedDelay(scheduleTask, 0, intervalMillis, TimeUnit.MILLISECONDS)
-
+    // ctrl+q(idea中查看方法描述)
     client.requestTotalExecutors(numExecutorsTarget, localityAwareTasks, hostToLocalTaskCount)
   }
 
@@ -279,7 +281,10 @@ private[spark] class ExecutorAllocationManager(
   }
 
   /**
-   * This is called at a fixed interval to regulate the number of pending executor requests
+   * 该方法按固定时间间隔调用,用以限定待执行executor请求的数量和正在运行的executor的数量.
+    * 首先,基于添加事件和当前需求调整我们注册过的执行器,如果某个存在的执行器的删除过期了,
+    * 就可以结束执行器.
+    * This is called at a fixed interval to regulate the number of pending executor requests
    * and number of executors running.
    *
    * First, adjust our requested executors based on the add time and our current needs.
@@ -288,26 +293,30 @@ private[spark] class ExecutorAllocationManager(
    * This is factored out into its own method for testing.
    */
   private def schedule(): Unit = synchronized {
-    val now = clock.getTimeMillis
+    val now = clock.getTimeMillis  //当前时间
 
-    updateAndSyncNumExecutorsTarget(now)
+    updateAndSyncNumExecutorsTarget(now)  // 重新计算所需executor数量,并更新请求executor数量
 
     val executorIdsToBeRemoved = ArrayBuffer[String]()
     removeTimes.retain { case (executorId, expireTime) =>
       val expired = now >= expireTime
       if (expired) {
         initializing = false
-        executorIdsToBeRemoved += executorId
+        executorIdsToBeRemoved += executorId //如果当前时间大于过期时间,向待删除数组中添加元素
       }
       !expired
     }
     if (executorIdsToBeRemoved.nonEmpty) {
-      removeExecutors(executorIdsToBeRemoved)
+      removeExecutors(executorIdsToBeRemoved) //删除过期Executor
     }
   }
 
   /**
-   * Updates our target number of executors and syncs the result with the cluster manager.
+   *
+    * 更新我们的目标executor数量并与cluster manager同步结果.
+    * 检查我们现有的分配和我们以前提出的请求是否超出了我们目前的需求.如果是的,删除我们的目标并让cluster manager
+    * 知晓,cluster manager会取消不需要的挂起请求.如果没有，并且添加时间已过，查看我们是否可以请求新的执行者并刷新添加时间.<br>
+    * Updates our target number of executors and syncs the result with the cluster manager.
    *
    * Check to see whether our existing allocation and the requests we've made previously exceed our
    * current needs. If so, truncate our target and let the cluster manager know so that it can
@@ -319,27 +328,30 @@ private[spark] class ExecutorAllocationManager(
    * @return the delta in the target number of executors.
    */
   private def updateAndSyncNumExecutorsTarget(now: Long): Int = synchronized {
-    val maxNeeded = maxNumExecutorsNeeded
+    val maxNeeded = maxNumExecutorsNeeded  // 所需最大executor数量.
 
-    if (initializing) {
+    if (initializing) { // 如果executorAllocationManager仍在初始化,返回0
       // Do not change our target while we are still initializing,
       // Otherwise the first job may have to ramp up unnecessarily
       0
-    } else if (maxNeeded < numExecutorsTarget) {
+    } else if (maxNeeded < numExecutorsTarget) { // 如果小于numExecutorTarget
+
+      // //目标数量超出了我们实际需要的数量，因此请停止添加新的执行程序并通知cluster manager取消多余的挂起请求
       // The target number exceeds the number we actually need, so stop adding new
       // executors and inform the cluster manager to cancel the extra pending requests
       val oldNumExecutorsTarget = numExecutorsTarget
-      numExecutorsTarget = math.max(maxNeeded, minNumExecutors)
+      numExecutorsTarget = math.max(maxNeeded, minNumExecutors) // 取其最大值
       numExecutorsToAdd = 1
-
+      // 如果新的目标数量改变了,就不要发给cluster manager
       // If the new target has not changed, avoid sending a message to the cluster manager
-      if (numExecutorsTarget < oldNumExecutorsTarget) {
+      if (numExecutorsTarget < oldNumExecutorsTarget) { // 又回到了requestTotalExecutors方法
         client.requestTotalExecutors(numExecutorsTarget, localityAwareTasks, hostToLocalTaskCount)
         logDebug(s"Lowering target number of executors to $numExecutorsTarget (previously " +
           s"$oldNumExecutorsTarget) because not all requested executors are actually needed")
       }
-      numExecutorsTarget - oldNumExecutorsTarget
+      numExecutorsTarget - oldNumExecutorsTarget  // 这就是返回值 executor的目标数量的变化值
     } else if (addTime != NOT_SET && now >= addTime) {
+      // 如果MaxNeeded>=numExecutorsTarget 并且添加时间不等于 Long.MaxValue
       val delta = addExecutors(maxNeeded)
       logDebug(s"Starting timer to add more executors (to " +
         s"expire in $sustainedSchedulerBacklogTimeoutS seconds)")
@@ -424,7 +436,8 @@ private[spark] class ExecutorAllocationManager(
   }
 
   /**
-   * Request the cluster manager to remove the given executors.
+   * 请求cluster manager来删除指定的executor,返回删除的列表.<br>
+    * Request the cluster manager to remove the given executors.
    * Returns the list of executors which are removed.
    */
   private def removeExecutors(executors: Seq[String]): Seq[String] = synchronized {

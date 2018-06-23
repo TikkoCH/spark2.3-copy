@@ -365,7 +365,9 @@ class SparkContext(config: SparkConf) extends Logging {
     value
   }
 
-  /** Control our logLevel. This overrides any user-defined log settings.
+  /**
+    * 控制日志级别,会覆盖所有其他用户定义的日志设置.
+    * Control our logLevel. This overrides any user-defined log settings.
    * @param logLevel The desired log level as a string.
    * Valid log levels include: ALL, DEBUG, ERROR, FATAL, INFO, OFF, TRACE, WARN
    */
@@ -377,11 +379,12 @@ class SparkContext(config: SparkConf) extends Logging {
         s" ${SparkContext.VALID_LOG_LEVELS.mkString(",")}")
     Utils.setLogLevel(org.apache.log4j.Level.toLevel(upperCased))
   }
-
+  //这一部分就是初始化sparkContext的所有属性.二百多行
   try {
     _conf = config.clone()
-    _conf.validateSettings()
+    _conf.validateSettings() //校验非法参数
 
+    // 不能没有master和appname
     if (!_conf.contains("spark.master")) {
       throw new SparkException("A master URL must be set in your configuration")
     }
@@ -502,6 +505,8 @@ class SparkContext(config: SparkConf) extends Logging {
     executorEnvs ++= _conf.getExecutorEnv
     executorEnvs("SPARK_USER") = sparkUser
 
+    // 在创建TaskSchedule之前需要先创建HearbeatReceiver.HeartbeatReceiver是心跳接收器,用于Driver和Executor
+    // 之间保持通信.构造executor构造器中需要心跳接收器.
     // We need to register "HeartbeatReceiver" before "createTaskScheduler" because Executor will
     // retrieve "HeartbeatReceiver" in the constructor. (SPARK-6640)
     _heartbeatReceiver = env.rpcEnv.setupEndpoint(
@@ -525,31 +530,33 @@ class SparkContext(config: SparkConf) extends Logging {
       System.setProperty("spark.ui.proxyBase", "/proxy/" + _applicationId)
     }
     _ui.foreach(_.setAppId(_applicationId))
-    _env.blockManager.initialize(_applicationId)
+    _env.blockManager.initialize(_applicationId)//blockManager是sparkEnv的组件,存储体系的重要组件,所以要对其初始化
 
     // The metrics system for Driver need to be set spark.app.id to app ID.
     // So it should start after we get app ID from the task scheduler and set spark.app.id.
-    _env.metricsSystem.start()
+    _env.metricsSystem.start() // 需要appID,所以从任务调度器获取appId之后再启动.
+    // 在启动之后将metric servlet hadnler与web ui关联
     // Attach the driver metrics servlet handler to the web ui after the metrics system is started.
     _env.metricsSystem.getServletHandlers.foreach(handler => ui.foreach(_.attachHandler(handler)))
-
+    // 如果spark.eventLog.enabled为true会注册listener.用来将日志持久化存储
     _eventLogger =
       if (isEventLogEnabled) {
         val logger =
           new EventLoggingListener(_applicationId, _applicationAttemptId, _eventLogDir.get,
-            _conf, _hadoopConfiguration)
+            _conf, _hadoopConfiguration) // 创建参数 appId,尝试id,日志文件夹...
         logger.start()
-        listenerBus.addToEventLogQueue(logger)
+        listenerBus.addToEventLogQueue(logger) //添加到事件总线.
         Some(logger)
       } else {
         None
       }
 
     // Optionally scale number of executors dynamically based on workload. Exposed for testing.
+    // 非local模式或spark.dynamicAllocation.testing为true时启用ExecutorAllocationManager
     val dynamicAllocationEnabled = Utils.isDynamicAllocationEnabled(_conf)
     _executorAllocationManager =
-      if (dynamicAllocationEnabled) {
-        schedulerBackend match {
+      if (dynamicAllocationEnabled) { //如果配置文件中设定了,创建执行器分配的管理者,集群的executor的添加移除都由其主管
+        schedulerBackend match {  // SchedulerBackend必须实现了ExecutorAllocationClient才能创建.
           case b: ExecutorAllocationClient =>
             Some(new ExecutorAllocationManager(
               schedulerBackend.asInstanceOf[ExecutorAllocationClient], listenerBus, _conf))
@@ -559,7 +566,7 @@ class SparkContext(config: SparkConf) extends Logging {
       } else {
         None
       }
-    _executorAllocationManager.foreach(_.start())
+    _executorAllocationManager.foreach(_.start()) //启动ExecutorAllocationManager
 
     _cleaner =
       if (_conf.getBoolean("spark.cleaner.referenceTracking", true)) {
@@ -2687,7 +2694,8 @@ object SparkContext extends Logging {
   }
 
   /**
-   * Create a task scheduler based on a given master URL.
+   * 根据指定的masterUrl创建任务调度器.返回调度器后端和任务调度器的元组.
+    * Create a task scheduler based on a given master URL.
    * Return a 2-tuple of the scheduler backend and the task scheduler.
    */
   private def createTaskScheduler(
@@ -2696,9 +2704,10 @@ object SparkContext extends Logging {
       deployMode: String): (SchedulerBackend, TaskScheduler) = {
     import SparkMasterRegex._
 
+    // 在本地运行时，不要尝试在失败时重新执行任务
     // When running locally, don't try to re-execute tasks on failure.
     val MAX_LOCAL_TASK_FAILURES = 1
-
+    // 模式匹配,不同的master返回的元组不同.
     master match {
       case "local" =>
         val scheduler = new TaskSchedulerImpl(sc, MAX_LOCAL_TASK_FAILURES, isLocal = true)

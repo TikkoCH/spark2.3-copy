@@ -136,16 +136,19 @@ private[spark] class EventLoggingListener(
     }
   }
 
-  /** Log the event as JSON. */
+  /**
+    * 这个方法在本类中多次调用,基本上感兴趣的事件都会通过这个方法处理.将日志记录成json
+    *
+    * Log the event as JSON. */
   private def logEvent(event: SparkListenerEvent, flushLogger: Boolean = false) {
-    val eventJson = JsonProtocol.sparkEventToJson(event)
+    val eventJson = JsonProtocol.sparkEventToJson(event) // 将事件转化成json
     // scalastyle:off println
-    writer.foreach(_.println(compact(render(eventJson))))
+    writer.foreach(_.println(compact(render(eventJson)))) // 输出
     // scalastyle:on println
     if (flushLogger) {
-      writer.foreach(_.flush())
+      writer.foreach(_.flush()) //将流中的数据刷出
       hadoopDataStream.foreach(ds => ds.getWrappedStream match {
-        case wrapped: DFSOutputStream => wrapped.hsync(EnumSet.of(SyncFlag.UPDATE_LENGTH))
+        case wrapped: DFSOutputStream => wrapped.hsync(EnumSet.of(SyncFlag.UPDATE_LENGTH))  // hdfs的输出流
         case _ => ds.hflush()
       })
     }

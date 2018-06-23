@@ -52,8 +52,8 @@ import org.apache.spark.util.{AccumulatorV2, ThreadUtils, Utils}
  */
 private[spark] class TaskSchedulerImpl(
     val sc: SparkContext,
-    val maxTaskFailures: Int,
-    isLocal: Boolean = false)
+    val maxTaskFailures: Int, // 最大失败次数
+    isLocal: Boolean = false) // 是否本地
   extends TaskScheduler with Logging {
 
   import TaskSchedulerImpl._
