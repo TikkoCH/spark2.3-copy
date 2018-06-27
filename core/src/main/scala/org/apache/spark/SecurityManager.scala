@@ -189,40 +189,43 @@ import org.apache.spark.util.Utils
  *  settings inherited from the worker which spawned that executor. It can be accomplished by
  *  setting `spark.ssl.useNodeLocalConf` to `true`.
  */
-
+// scalastyle:off
 private[spark] class SecurityManager(
     sparkConf: SparkConf,
     val ioEncryptionKey: Option[Array[Byte]] = None)
   extends Logging with SecretKeyHolder {
 
   import SecurityManager._
-
+  // scalastyle:off
+  //  允许所有用户/用户组拥有读写权限
   // allow all users/groups to have view/modify permissions
   private val WILDCARD_ACL = "*"
-
+  // 是否开启认证.可以通过spark.authenticate属性配置,默认为false
   private val authOn = sparkConf.get(NETWORK_AUTH_ENABLED)
+  // 是否对账号进行授权检查,可以通过spark.acls.enable(优先级较高)
+  // 或spark.ui.acls.enable(为了向前兼容)配置.默认false
   // keep spark.ui.acls.enable for backwards compatibility with 1.0
   private var aclsOn =
     sparkConf.getBoolean("spark.acls.enable", sparkConf.getBoolean("spark.ui.acls.enable", false))
-
+  // 管理员账号集合.可以通过spark.admin.acls属性配置,默认为空.
   // admin acls should be set before view or modify acls
   private var adminAcls: Set[String] =
     stringToSet(sparkConf.get("spark.admin.acls", ""))
-
+  // 管理员用户组集合.包括adminAcls,defaultAclUsers和spark.ui.view.acls属性配置的用户
   // admin group acls should be set before view or modify group acls
   private var adminAclsGroups : Set[String] =
     stringToSet(sparkConf.get("spark.admin.acls.groups", ""))
-
+  // 有查看权限的账号集合.包括adminAcls,defaultAclUsers和spark.ui.view.acls属性配置的用户
   private var viewAcls: Set[String] = _
-
+  // 拥有查看权限的用户组的集合.包括adminAclsGroups和saprk.ui.view.acls.groups属性配置的用户
   private var viewAclsGroups: Set[String] = _
-
+  // 修改权限用户集合
   // list of users who have permission to modify the application. This should
   // apply to both UI and CLI for things like killing the application.
   private var modifyAcls: Set[String] = _
-
+  // 修改权限用户组集合
   private var modifyAclsGroups: Set[String] = _
-
+  // 默认用户.包括系统属性user.name指定的用户,或环境变量中有SPARK_USER
   // always add the current user and SPARK_USER to the viewAcls
   private val defaultAclUsers = Set[String](System.getProperty("user.name", ""),
     Utils.getCurrentUserName())
@@ -239,11 +242,13 @@ private[spark] class SecurityManager(
     "; groups with view permissions: " + viewAclsGroups.toString() +
     "; users  with modify permissions: " + modifyAcls.toString() +
     "; groups with modify permissions: " + modifyAclsGroups.toString())
-
+  // 设置我们自己的身份验证器以正确协商HTTP连接的用户/密码。
+  // 这是HTTP客户端从HttpServer中获取所需的。 把它放在这所以只会设置一次。
   // Set our own authenticator to properly negotiate user/password for HTTP connections.
   // This is needed by the HTTP client fetching from the HttpServer. Put here so its
   // only set once.
   if (authOn) {
+    //设置默认的口令认证示例Authenticator,它的getPasswordAuhentication方法用于获取用户名密码.
     Authenticator.setDefault(
       new Authenticator() {
         override def getPasswordAuthentication(): PasswordAuthentication = {
