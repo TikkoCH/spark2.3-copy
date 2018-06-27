@@ -420,7 +420,11 @@ object SparkEnv extends Logging {
   }
 
   /**
-   * Return a map representation of jvm information, Spark properties, system properties, and
+   * 返回jvm信息的map表示，Spark属性，系统属性和类路径。
+    * map键定义类别，map值将相应的属性表示为KV对的序列。
+    * 这主要用于SparkListenerEnvironmentUpdate.<br>
+    *
+    * Return a map representation of jvm information, Spark properties, system properties, and
    * class paths. Map keys define the category, and map values represent the corresponding
    * attributes as a sequence of KV pairs. This is used mainly for SparkListenerEnvironmentUpdate.
    */
@@ -430,7 +434,7 @@ object SparkEnv extends Logging {
       schedulingMode: String,
       addedJars: Seq[String],
       addedFiles: Seq[String]): Map[String, Seq[(String, String)]] = {
-
+    // JVM信息.java版本,java路径和Scala版本
     import Properties._
     val jvmInformation = Seq(
       ("Java Version", s"$javaVersion ($javaVendor)"),
@@ -440,6 +444,7 @@ object SparkEnv extends Logging {
 
     // Spark properties
     // This includes the scheduling mode whether or not it is configured (used by SparkUI)
+    // Spark属性,这包括调度模式是否配置（由SparkUI使用）
     val schedulerMode =
       if (!conf.contains("spark.scheduler.mode")) {
         Seq(("spark.scheduler.mode", schedulingMode))
@@ -449,12 +454,15 @@ object SparkEnv extends Logging {
     val sparkProperties = (conf.getAll ++ schedulerMode).sorted
 
     // System properties that are not java classpaths
+    // 系统属性
     val systemProperties = Utils.getSystemProperties.toSeq
+    // 其他属性
     val otherProperties = systemProperties.filter { case (k, _) =>
       k != "java.class.path" && !k.startsWith("spark.")
     }.sorted
 
     // Class paths including all added jars and files
+    // 添加的所有jar和文件
     val classPathEntries = javaClassPath
       .split(File.pathSeparator)
       .filterNot(_.isEmpty)

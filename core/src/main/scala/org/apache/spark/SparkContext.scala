@@ -242,7 +242,7 @@ class SparkContext(config: SparkConf) extends Logging {
    * changed at runtime.
    */
   def getConf: SparkConf = conf.clone()
-
+  // 这两个方法用来获取jar报的集合和其他文件的集合
   def jars: Seq[String] = _jars
   def files: Seq[String] = _files
   def master: String = _conf.get("spark.master")
@@ -411,8 +411,10 @@ class SparkContext(config: SparkConf) extends Logging {
     _conf.setIfMissing("spark.driver.port", "0")
 
     _conf.set("spark.executor.id", SparkContext.DRIVER_IDENTIFIER)
-
+    // 读取用户指定的jar.如果部署模式为yarn,_jar是由spark.jars指定的文件和spark.yarn.dist.jars属性的并集
+    // 其他模式则是通过spark.jars指定
     _jars = Utils.getUserJars(_conf)
+    // 读取用户指定的文件
     _files = _conf.getOption("spark.files").map(_.split(",")).map(_.filter(_.nonEmpty))
       .toSeq.flatten
 
@@ -475,6 +477,7 @@ class SparkContext(config: SparkConf) extends Logging {
     _hadoopConfiguration = SparkHadoopUtil.get.newConfiguration(_conf)
 
     // Add each JAR given through the constructor
+    // 将jar文件添加到Driver的RPC环境中
     if (jars != null) {
       jars.foreach(addJar)
     }
@@ -568,6 +571,7 @@ class SparkContext(config: SparkConf) extends Logging {
       }
     _executorAllocationManager.foreach(_.start()) //启动ExecutorAllocationManager
 
+    // 如果spark.cleaner.referenceTracking配置是true,则创建ContextCleaner并启动,默认是true
     _cleaner =
       if (_conf.getBoolean("spark.cleaner.referenceTracking", true)) {
         Some(new ContextCleaner(this))
@@ -578,25 +582,31 @@ class SparkContext(config: SparkConf) extends Logging {
 
     setupAndStartListenerBus()
     postEnvironmentUpdate()
-    postApplicationStart()
+    postApplicationStart()  // 向时间总线投递SparkListenerApplicationStart事件
 
     // Post init
-    _taskScheduler.postStartHook()
+    _taskScheduler.postStartHook()  // 等待SchedulerBackend准备完成
+    // 向性能监控系统注册Source--DAGSchedulerSource
     _env.metricsSystem.registerSource(_dagScheduler.metricsSource)
+    // BlockManagerSource
     _env.metricsSystem.registerSource(new BlockManagerSource(_env.blockManager))
+    // ExecutorAllocationManagerSource
     _executorAllocationManager.foreach { e =>
       _env.metricsSystem.registerSource(e.executorAllocationManagerSource)
     }
 
+    // 用户如果忘记的话确保context已经停止.这能避免JVM完全退出后留下未完成的日志事件.
     // Make sure the context is stopped if the user forgets about it. This avoids leaving
     // unfinished event logs around after the JVM exits cleanly. It doesn't help if the JVM
     // is killed, though.
     logDebug("Adding shutdown hook") // force eager creation of logger
+    // 添加SparkContext关闭的hook,确保JVM推出之前调用SparkContext的stop方法进行关闭工作
     _shutdownHookRef = ShutdownHookManager.addShutdownHook(
       ShutdownHookManager.SPARK_CONTEXT_SHUTDOWN_PRIORITY) { () =>
       logInfo("Invoking stop() from shutdown hook")
       stop()
     }
+
   } catch {
     case NonFatal(e) =>
       logError("Error initializing SparkContext.", e)
@@ -1493,7 +1503,9 @@ class SparkContext(config: SparkConf) extends Logging {
   }
 
   /**
-   * Broadcast a read-only variable to the cluster, returning a
+   * broadcast方法用于广播给定的对象.向集群中广播一个只读变量,返回Broadcast对象用于在分布式函数中读取.
+    * 只会向集群中发送一次.
+    * Broadcast a read-only variable to the cluster, returning a
    * [[org.apache.spark.broadcast.Broadcast]] object for reading it in distributed functions.
    * The variable will be sent to each cluster only once.
    *
@@ -1504,6 +1516,7 @@ class SparkContext(config: SparkConf) extends Logging {
     assertNotStopped()
     require(!classOf[RDD[_]].isAssignableFrom(classTag[T].runtimeClass),
       "Can not directly broadcast RDDs; instead, call collect() and broadcast the result.")
+    // 通过sparkEnv的broadcastManager创建一个Broadcast对象
     val bc = env.broadcastManager.newBroadcast[T](value, isLocal)
     val callSite = getCallSite
     logInfo("Created broadcast " + bc.id + " from " + callSite.shortForm)
@@ -1512,7 +1525,8 @@ class SparkContext(config: SparkConf) extends Logging {
   }
 
   /**
-   * Add a file to be downloaded with this Spark job on every node.
+   * 添加一个spark job中每个节点都要下载的文件.如果在执行时添加了文件,只有等到下一个任务开始时才有效.
+    * Add a file to be downloaded with this Spark job on every node.
    *
    * If a file is added during execution, it will not be available until the next TaskSet starts.
    *
@@ -1541,7 +1555,8 @@ class SparkContext(config: SparkConf) extends Logging {
    * only supported for Hadoop-supported filesystems.
    */
   def addFile(path: String, recursive: Boolean): Unit = {
-    val uri = new Path(path).toUri
+    val uri = new Path(path).toUri  // 根据路径名称创建uri
+    // 根据uri类型获取正确路径
     val schemeCorrectedPath = uri.getScheme match {
       case null | "local" => new File(path).getCanonicalFile.toURI.toString
       case _ => path
@@ -1549,6 +1564,7 @@ class SparkContext(config: SparkConf) extends Logging {
 
     val hadoopPath = new Path(schemeCorrectedPath)
     val scheme = new URI(schemeCorrectedPath).getScheme
+    // 如果http,https,ftp中没有与scheme相对应的类型,应该就是hdfs
     if (!Array("http", "https", "ftp").contains(scheme)) {
       val fs = hadoopPath.getFileSystem(hadoopConfiguration)
       val isDir = fs.getFileStatus(hadoopPath).isDirectory
@@ -1562,6 +1578,7 @@ class SparkContext(config: SparkConf) extends Logging {
       }
     } else {
       // SPARK-17650: Make sure this is a valid URL before adding it to the list of dependencies
+      // 在添加到依赖列表之前先验证URL有效性
       Utils.validateURL(uri)
     }
 
@@ -1577,13 +1594,14 @@ class SparkContext(config: SparkConf) extends Logging {
       // SparkFiles API to access files.
       Utils.fetchFile(uri.toString, new File(SparkFiles.getRootDirectory()), conf,
         env.securityManager, hadoopConfiguration, timestamp, useCache = false)
-      postEnvironmentUpdate()
+      postEnvironmentUpdate() // 因为添加Jar或File会对应用的环境产生影响,所以更新环境
     }
   }
 
   /**
    * :: DeveloperApi ::
-   * Register a listener to receive up-calls from events that happen during execution.
+   * 用于向LiveListenerBus中添加实现SparkListenerInterface的监听器
+    * Register a listener to receive up-calls from events that happen during execution.
    */
   @DeveloperApi
   def addSparkListener(listener: SparkListenerInterface) {
@@ -1819,7 +1837,10 @@ class SparkContext(config: SparkConf) extends Logging {
   }
 
   /**
-   * Adds a JAR dependency for all tasks to be executed on this `SparkContext` in the future.
+   *
+    * 为将来在此`SparkContext`上执行的所有任务添加JAR依赖项。
+    * 如果在执行过程中添加了一个jar，它将在下一个TaskSet启动之前不可用。<br>
+    * Adds a JAR dependency for all tasks to be executed on this `SparkContext` in the future.
    *
    * If a jar is added during execution, it will not be available until the next TaskSet starts.
    *
@@ -1836,6 +1857,8 @@ class SparkContext(config: SparkConf) extends Logging {
           throw new IllegalArgumentException(
             s"Directory ${file.getAbsoluteFile} is not allowed for addJar")
         }
+        // addJar方法把Jar文件添加到Driver本地的RpcEnv的NettyStreamManager中.
+        // 并将Jar文件的添加时间戳信息存储到addedJars中
         env.rpcEnv.fileServer.addJar(file)
       } catch {
         case NonFatal(e) =>
@@ -1843,7 +1866,7 @@ class SparkContext(config: SparkConf) extends Logging {
           null
       }
     }
-
+    // 对于不同的文件名调用上面定义的方法
     if (path == null) {
       logWarning("null specified as parameter to addJar")
     } else {
@@ -2050,8 +2073,10 @@ class SparkContext(config: SparkConf) extends Logging {
     if (conf.getBoolean("spark.logLineage", false)) {
       logInfo("RDD's recursive dependencies:\n" + rdd.toDebugString)
     }
+    // 将构建好DAG的RDD提交给DAGScheduler进行调度.
     dagScheduler.runJob(rdd, cleanedFunc, partitions, callSite, resultHandler, localProperties.get)
     progressBar.foreach(_.finishAll())
+    // 保存检查点
     rdd.doCheckpoint()
   }
 
@@ -2320,12 +2345,16 @@ class SparkContext(config: SparkConf) extends Logging {
   }
 
   /**
-   * Set the directory under which RDDs are going to be checkpointed.
+   * 设置将要放置RDD检查点的文件夹
+    *
+    * Set the directory under which RDDs are going to be checkpointed.
    * @param directory path to the directory where checkpoint files will be stored
    * (must be HDFS path if running in cluster)
    */
   def setCheckpointDir(directory: String) {
-
+    // 如果我们在集群上运行，目录是本地的情况下记录警告。 否则，
+    // 驱动程序可能会尝试从自己的本地文件系统重建检查点RDD，
+    // 这是不正确的，因为检查点文件实际上位于执行程序计算机上。
     // If we are running on a cluster, log a warning if the directory is local.
     // Otherwise, the driver may attempt to reconstruct the checkpointed RDD from
     // its own local file system, which is incorrect because the checkpoint files
@@ -2374,15 +2403,18 @@ class SparkContext(config: SparkConf) extends Logging {
   private[spark] def newRddId(): Int = nextRddId.getAndIncrement()
 
   /**
-   * Registers listeners specified in spark.extraListeners, then starts the listener bus.
+   * 注册spark.extraListener中指定的监听器,并启动.应该在所有内部监听器在消息总线中注册完成再调用.
+    * Registers listeners specified in spark.extraListeners, then starts the listener bus.
    * This should be called after all internal listeners have been registered with the listener bus
    * (e.g. after the web UI and event logging listeners have been registered).
    */
   private def setupAndStartListenerBus(): Unit = {
     try {
       conf.get(EXTRA_LISTENERS).foreach { classNames =>
+        // 通过反射创建监听器对象的数组
         val listeners = Utils.loadExtensions(classOf[SparkListenerInterface], classNames, conf)
         listeners.foreach { listener =>
+          // 对于每个监听器添加到非内部监听器队列
           listenerBus.addToSharedQueue(listener)
           logInfo(s"Registered listener ${listener.getClass().getName()}")
         }
@@ -2396,12 +2428,13 @@ class SparkContext(config: SparkConf) extends Logging {
         }
     }
 
-    listenerBus.start(this, _env.metricsSystem)
-    _listenerBusStarted = true
+    listenerBus.start(this, _env.metricsSystem) // 启动事件总线
+    _listenerBusStarted = true // 事件总线开始的状态标志设为true
   }
 
   /** Post the application start event */
   private def postApplicationStart() {
+    // 这段代码是建立在任务调度器已经初始化并且可以进行使用的前提上
     // Note: this code assumes that the task scheduler has been initialized and has contacted
     // the cluster manager to get an application ID (in case the cluster manager provides one).
     listenerBus.post(SparkListenerApplicationStart(appName, Some(applicationId),
@@ -2413,7 +2446,9 @@ class SparkContext(config: SparkConf) extends Logging {
     listenerBus.post(SparkListenerApplicationEnd(System.currentTimeMillis))
   }
 
-  /** Post the environment update event once the task scheduler is ready */
+  /**
+    * 一旦任务调度器准备完成上传环境更新事件
+    * Post the environment update event once the task scheduler is ready */
   private def postEnvironmentUpdate() {
     if (taskScheduler != null) {
       val schedulingMode = getSchedulingMode.toString
@@ -2421,7 +2456,8 @@ class SparkContext(config: SparkConf) extends Logging {
       val addedFilePaths = addedFiles.keys.toSeq
       val environmentDetails = SparkEnv.environmentDetails(conf, schedulingMode, addedJarPaths,
         addedFilePaths)
-      val environmentUpdate = SparkListenerEnvironmentUpdate(environmentDetails)
+      val environmentUpdate = SparkListenerEnvironmentUpdate(environmentDetails) // 这是一个case类
+      // 最后上交到事件总线,该事件最终将被EnvironmentListener监听,并影响EnvironmentPage页面中的输出内容
       listenerBus.post(environmentUpdate)
     }
   }
@@ -2437,16 +2473,19 @@ class SparkContext(config: SparkConf) extends Logging {
  * various Spark features.
  */
 object SparkContext extends Logging {
+  /** 日志级别*/
   private val VALID_LOG_LEVELS =
     Set("ALL", "DEBUG", "ERROR", "FATAL", "INFO", "OFF", "TRACE", "WARN")
 
   /**
-   * Lock that guards access to global variables that track SparkContext construction.
+   * 对SparkContext构造时使用的锁,以此保证构造SparkContext的过程是安全的.
+    * Lock that guards access to global variables that track SparkContext construction.
    */
   private val SPARK_CONTEXT_CONSTRUCTOR_LOCK = new Object()
 
   /**
-   * The active, fully-constructed SparkContext.  If no SparkContext is active, then this is `null`.
+   * 用于保存激活的SparkContext.
+    * The active, fully-constructed SparkContext.  If no SparkContext is active, then this is `null`.
    *
    * Access to this field is guarded by SPARK_CONTEXT_CONSTRUCTOR_LOCK.
    */
@@ -2454,7 +2493,8 @@ object SparkContext extends Logging {
     new AtomicReference[SparkContext](null)
 
   /**
-   * Points to a partially-constructed SparkContext if some thread is in the SparkContext
+   * 标记当前正在构造的SparkContext
+    * Points to a partially-constructed SparkContext if some thread is in the SparkContext
    * constructor, or `None` if no SparkContext is being constructed.
    *
    * Access to this field is guarded by SPARK_CONTEXT_CONSTRUCTOR_LOCK
@@ -2500,7 +2540,9 @@ object SparkContext extends Logging {
   }
 
   /**
-   * This function may be used to get or instantiate a SparkContext and register it as a
+   * 如果没有激活的SparkContext,则构造SparkContext,并调用setActiveContext方法保存到activeContext中,
+    * 最后返回SparkContext.<br>
+    * This function may be used to get or instantiate a SparkContext and register it as a
    * singleton object. Because we can only have one active SparkContext per JVM,
    * this is useful when applications may wish to share a SparkContext.
    *
@@ -2568,7 +2610,8 @@ object SparkContext extends Logging {
   }
 
   /**
-   * Called at the end of the SparkContext constructor to ensure that no other SparkContext has
+   * 用于将SparkContext作为激活的SparkContext保存到activeContext中.
+    * Called at the end of the SparkContext constructor to ensure that no other SparkContext has
    * raced with this constructor and started.
    */
   private[spark] def setActiveContext(
