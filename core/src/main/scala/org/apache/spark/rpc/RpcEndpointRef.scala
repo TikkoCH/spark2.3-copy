@@ -16,7 +16,7 @@
  */
 
 package org.apache.spark.rpc
-
+// scalastyle:off
 import scala.concurrent.Future
 import scala.reflect.ClassTag
 
@@ -75,7 +75,11 @@ private[spark] abstract class RpcEndpointRef(conf: SparkConf)
   def ask[T: ClassTag](message: Any): Future[T] = ask(message, defaultAskTimeout)
 
   /**
-   * Send a message to the corresponding [[RpcEndpoint.receiveAndReply]] and get its result within a
+   * 发送消息到RpcEndpoint中的receiveAndReply方法中并且在限定时间内获取结果.
+    * 如果失败抛出异常.这个方法是一个阻塞方法,可能会花费一定时间.
+    * 此方法遇到异常会重试,直到达到指定次数.由于该方法会重试,所以要求服务器对消息是幂等的.
+    * 此方法采用了at-least-once的投递规则.参考AKKA.
+    * Send a message to the corresponding [[RpcEndpoint.receiveAndReply]] and get its result within a
    * default timeout, throw an exception if this fails.
    *
    * Note: this is a blocking action which may cost a lot of time,  so don't call it in a message
@@ -88,7 +92,9 @@ private[spark] abstract class RpcEndpointRef(conf: SparkConf)
   def askSync[T: ClassTag](message: Any): T = askSync(message, defaultAskTimeout)
 
   /**
-   * Send a message to the corresponding [[RpcEndpoint.receiveAndReply]] and get its result within a
+   * 发送消息到RpcEndpoint中的receiveAndReply方法中并且在限定时间内获取结果.
+    * 如果失败抛出异常.这个方法是一个阻塞方法,可能会花费一定时间.
+    * Send a message to the corresponding [[RpcEndpoint.receiveAndReply]] and get its result within a
    * specified timeout, throw an exception if this fails.
    *
    * Note: this is a blocking action which may cost a lot of time, so don't call it in a message

@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 package org.apache.spark.rpc.netty
-
+// scalastyle:off
 import java.io._
 import java.net.{InetSocketAddress, URI}
 import java.nio.ByteBuffer
@@ -46,12 +46,12 @@ private[netty] class NettyRpcEnv(
     host: String,
     securityManager: SecurityManager,
     numUsableCores: Int) extends RpcEnv(conf) with Logging {
-
+  // 三个参数sparkConf,模块名,可用核心
   private[netty] val transportConf = SparkTransportConf.fromSparkConf(
     conf.clone.set("spark.rpc.io.numConnectionsPerPeer", "1"),
     "rpc",
     conf.getInt("spark.rpc.io.threads", 0))
-
+  // 消息调度器,负责将RPC消息路由到该对此消息处理的Rpc端点(RpcEndPoint).
   private val dispatcher: Dispatcher = new Dispatcher(this, numUsableCores)
 
   private val streamManager = new NettyStreamManager(this)

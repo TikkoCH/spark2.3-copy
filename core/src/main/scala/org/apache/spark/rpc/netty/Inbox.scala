@@ -16,7 +16,7 @@
  */
 
 package org.apache.spark.rpc.netty
-
+// scalastyle:off
 import javax.annotation.concurrent.GuardedBy
 
 import scala.util.control.NonFatal
@@ -25,71 +25,90 @@ import org.apache.spark.SparkException
 import org.apache.spark.internal.Logging
 import org.apache.spark.rpc.{RpcAddress, RpcEndpoint, ThreadSafeRpcEndpoint}
 
-
+// sealed class必须和subclass 在一个文件中
 private[netty] sealed trait InboxMessage
-
+// RpcEndpoint处理此类型的消息后不需要想客户端回复消息
 private[netty] case class OneWayMessage(
     senderAddress: RpcAddress,
     content: Any) extends InboxMessage
-
+// Rpc消息,RpcEndpoint处理完消息需要回复
 private[netty] case class RpcMessage(
     senderAddress: RpcAddress,
     content: Any,
     context: NettyRpcCallContext) extends InboxMessage
-
+// Inbox实例化之后,通知于此Inbox相关联的RpcEndpoin启动
 private[netty] case object OnStart extends InboxMessage
-
+// Inbox停止之后,通知于此Inbox相关联的RpcEndpoin停止
 private[netty] case object OnStop extends InboxMessage
 
-/** A message to tell all endpoints that a remote process has connected. */
+/**
+  * 此消息用于告诉所有的RpcEndpoin,有远端进程已经与当前Rpc服务建立了连接
+  * A message to tell all endpoints that a remote process has connected. */
 private[netty] case class RemoteProcessConnected(remoteAddress: RpcAddress) extends InboxMessage
 
-/** A message to tell all endpoints that a remote process has disconnected. */
+/**
+  * 此消息用于告诉所有的RpcEndpoin,有远端进程已经与当前Rpc服务断开了连接
+  * A message to tell all endpoints that a remote process has disconnected. */
 private[netty] case class RemoteProcessDisconnected(remoteAddress: RpcAddress) extends InboxMessage
 
-/** A message to tell all endpoints that a network error has happened. */
+/**
+  * 此消息用于告诉所有的RpcEndpoin,与远端某个地址之间的连接发生了错误
+  * A message to tell all endpoints that a network error has happened. */
 private[netty] case class RemoteProcessConnectionError(cause: Throwable, remoteAddress: RpcAddress)
   extends InboxMessage
 
 /**
- * An inbox that stores messages for an [[RpcEndpoint]] and posts messages to it thread-safely.
+ *
+  * 端点内的消息盒子.每个RpcEndpoint都有一个对应的消息盒子.该box存储InboxMessage消息的列表.
+  * 所有的消息将缓存在message列表中,并由RpcEndpoint异步处理这些消息.发送消息是线程安全的.
+  * An inbox that stores messages for an [[RpcEndpoint]] and posts messages to it thread-safely.
  */
 private[netty] class Inbox(
     val endpointRef: NettyRpcEndpointRef,
     val endpoint: RpcEndpoint)
   extends Logging {
-
+  // 这是scala的语法,自身类型,inbox等同于this
   inbox =>  // Give this an alias so we can use it more clearly in closures.
-
+  // 消息列表.用于缓存需要有对应RpcEndPoint处理的消息.
   @GuardedBy("this")
   protected val messages = new java.util.LinkedList[InboxMessage]()
 
-  /** True if the inbox (and its associated endpoint) is stopped. */
+  /**
+    * 停止即true
+    * True if the inbox (and its associated endpoint) is stopped. */
   @GuardedBy("this")
   private var stopped = false
 
-  /** Allow multiple threads to process messages at the same time. */
+  /**
+    * 是否允许多线程处理同时消息.默认否
+    * Allow multiple threads to process messages at the same time. */
   @GuardedBy("this")
   private var enableConcurrent = false
 
-  /** The number of threads processing messages for this inbox. */
+  /**
+    * 激活线程数量.正在处理messaages中消息的线程数量.
+    * The number of threads processing messages for this inbox. */
   @GuardedBy("this")
   private var numActiveThreads = 0
 
   // OnStart should be the first message to process
   inbox.synchronized {
+    // 向自身的messages列表中放入OnStart消息.
     messages.add(OnStart)
   }
 
   /**
-   * Process stored messages.
+   * 处理存储的消息
+    * Process stored messages.
    */
   def process(dispatcher: Dispatcher): Unit = {
     var message: InboxMessage = null
     inbox.synchronized {
+      // 不允许多线程并且活动线程数不等于0就返回
       if (!enableConcurrent && numActiveThreads != 0) {
         return
       }
+      // 获取消息且不为空 活动线程数+1
       message = messages.poll()
       if (message != null) {
         numActiveThreads += 1
@@ -99,6 +118,7 @@ private[netty] class Inbox(
     }
     while (true) {
       safelyCall(endpoint) {
+        // 根据消息类型进行匹配
         message match {
           case RpcMessage(_sender, content, context) =>
             try {

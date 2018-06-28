@@ -16,7 +16,7 @@
  */
 
 package org.apache.spark.rpc.netty
-
+// scalastyle:off
 import java.util.concurrent.{ConcurrentHashMap, ConcurrentMap, LinkedBlockingQueue, ThreadPoolExecutor, TimeUnit}
 import javax.annotation.concurrent.GuardedBy
 
@@ -31,30 +31,39 @@ import org.apache.spark.rpc._
 import org.apache.spark.util.ThreadUtils
 
 /**
- * A message dispatcher, responsible for routing RPC messages to the appropriate endpoint(s).
+ * 消息调度器,负责将RPC消息路由到应当对此消息处理的Rpc端点(RpcEndPoint).
+  * 分配给进程的CPU内核的数量，用于调整线程池的大小。如果为0，则将考虑主机上可用的CPU。
+  * A message dispatcher, responsible for routing RPC messages to the appropriate endpoint(s).
  *
  * @param numUsableCores Number of CPU cores allocated to the process, for sizing the thread pool.
  *                       If 0, will consider the available CPUs on the host.
  */
 private[netty] class Dispatcher(nettyEnv: NettyRpcEnv, numUsableCores: Int) extends Logging {
 
+  /**
+    * RPC端点数据,包括RpcEndPoint,NettyRpcEndpointRef和Inbox,属于同一个端点示例.
+    * RpcEndPoint,NettyRpcEndpointRef和Inbox这三个对象通过EndpointData关联起来.
+    */
   private class EndpointData(
       val name: String,
       val endpoint: RpcEndpoint,
       val ref: NettyRpcEndpointRef) {
     val inbox = new Inbox(ref, endpoint)
   }
-
+  // 端点示例RpcEndpoint名称和EndpointData的map
   private val endpoints: ConcurrentMap[String, EndpointData] =
     new ConcurrentHashMap[String, EndpointData]
+  // RpcEndpoint和RpcEndpointRef的映射map.有了该缓存,就可以使用endpoint实例从中快速获取
+  // 或者删除endpointRef
   private val endpointRefs: ConcurrentMap[RpcEndpoint, RpcEndpointRef] =
     new ConcurrentHashMap[RpcEndpoint, RpcEndpointRef]
-
+  // 存储端点数据EndpointData的阻塞队列.只有Inbox中有消息的EndpointData才会放入其中
   // Track the receivers whose inboxes may contain messages.
   private val receivers = new LinkedBlockingQueue[EndpointData]
 
   /**
-   * True if the dispatcher has been stopped. Once stopped, all messages posted will be bounced
+   * 该路由是否停止.一旦停止,所有发出的消息会立即驳回.
+    * True if the dispatcher has been stopped. Once stopped, all messages posted will be bounced
    * immediately.
    */
   @GuardedBy("this")
@@ -193,31 +202,41 @@ private[netty] class Dispatcher(nettyEnv: NettyRpcEnv, numUsableCores: Int) exte
     endpoints.containsKey(name)
   }
 
-  /** Thread pool used for dispatching messages. */
+  /**
+    * 用来调度消息的线程池.
+    * Thread pool used for dispatching messages. */
   private val threadpool: ThreadPoolExecutor = {
+    // 获取线程池的大小.默认为2与当前系统可用处理器之间的最大值.
     val availableCores =
       if (numUsableCores > 0) numUsableCores else Runtime.getRuntime.availableProcessors()
     val numThreads = nettyEnv.conf.getInt("spark.rpc.netty.dispatcher.numThreads",
       math.max(2, availableCores))
+    // 创建固定大小线程池,名称为dispatcher-event-loop
     val pool = ThreadUtils.newDaemonFixedThreadPool(numThreads, "dispatcher-event-loop")
+    // 启动多个运行MessageLoop任务的线程.数量与线程池大小相同.
     for (i <- 0 until numThreads) {
       pool.execute(new MessageLoop)
     }
-    pool
+    pool // 返回线程池的引用
   }
 
   /** Message loop used for dispatching messages. */
   private class MessageLoop extends Runnable {
     override def run(): Unit = {
       try {
+        // 不断处理新消息
         while (true) {
           try {
+            // 获取EndpointData.因为receovers是阻塞队列,只有有值才能拿到EndpointData
             val data = receivers.take()
+            // 如果data等于PoisonPill,就退出
             if (data == PoisonPill) {
-              // Put PoisonPill back so that other MessageLoops can see it.
+              // Put PoisonPill back so that other MessageLoops can see it.\
+              // 再将其放回,保证其他MessageLoop也拿到PoisonPill.
               receivers.offer(PoisonPill)
               return
             }
+            // 不是PoisonPill就可以处理消息了.
             data.inbox.process(Dispatcher.this)
           } catch {
             case NonFatal(e) => logError(e.getMessage, e)
