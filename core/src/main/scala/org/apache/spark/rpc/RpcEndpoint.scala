@@ -20,7 +20,8 @@ package org.apache.spark.rpc
 import org.apache.spark.SparkException
 
 /**
- * A factory class to create the [[RpcEnv]]. It must have an empty constructor so that it can be
+ * 用来创建RpcEnv的工厂类.必须有一个空构造器,这样才能通过反射创建.
+  * A factory class to create the [[RpcEnv]]. It must have an empty constructor so that it can be
  * created using Reflection.
  */
 private[spark] trait RpcEnvFactory {
@@ -29,7 +30,9 @@ private[spark] trait RpcEnvFactory {
 }
 
 /**
- * An end point for the RPC that defines what functions to trigger given a message.
+ * RPC的端点，定义了给定消息时要触发的函数.该对象保证了onStart,receive和onStop顺序调用.
+  * 生命周期constructor -> onStart -> receive* -> onStop.<br>
+  * An end point for the RPC that defines what functions to trigger given a message.
  *
  * It is guaranteed that `onStart`, `receive` and `onStop` will be called in sequence.
  *
@@ -46,12 +49,15 @@ private[spark] trait RpcEnvFactory {
 private[spark] trait RpcEndpoint {
 
   /**
-   * The [[RpcEnv]] that this [[RpcEndpoint]] is registered to.
+   * 当前RpcEndpoint所属的RpcEnv
+    * The [[RpcEnv]] that this [[RpcEndpoint]] is registered to.
    */
   val rpcEnv: RpcEnv
 
   /**
-   * The [[RpcEndpointRef]] of this [[RpcEndpoint]]. `self` will become valid when `onStart` is
+   * 当前RpcEndPoint对象相关联的RpcEndPointRef.当onStart调用之后self属性才有效.
+    * 所以别在onStart执行之前调用self.当onStop调用之后,self变为null.<br>
+    * The [[RpcEndpointRef]] of this [[RpcEndpoint]]. `self` will become valid when `onStart` is
    * called. And `self` will become `null` when `onStop` is called.
    *
    * Note: Because before `onStart`, [[RpcEndpoint]] has not yet been registered and there is not
@@ -63,7 +69,8 @@ private[spark] trait RpcEndpoint {
   }
 
   /**
-   * Process messages from `RpcEndpointRef.send` or `RpcCallContext.reply`. If receiving a
+   * 接收消息并处理,但不用给客户端回复.
+    * Process messages from `RpcEndpointRef.send` or `RpcCallContext.reply`. If receiving a
    * unmatched message, `SparkException` will be thrown and sent to `onError`.
    */
   def receive: PartialFunction[Any, Unit] = {
@@ -71,7 +78,8 @@ private[spark] trait RpcEndpoint {
   }
 
   /**
-   * Process messages from `RpcEndpointRef.ask`. If receiving a unmatched message,
+   * 收到消息处理并回复.通过RpcCallContext实现回复.
+    * Process messages from `RpcEndpointRef.ask`. If receiving a unmatched message,
    * `SparkException` will be thrown and sent to `onError`.
    */
   def receiveAndReply(context: RpcCallContext): PartialFunction[Any, Unit] = {
@@ -79,7 +87,8 @@ private[spark] trait RpcEndpoint {
   }
 
   /**
-   * Invoked when any exception is thrown during handling messages.
+   * 处理message产生异常时调用
+    * Invoked when any exception is thrown during handling messages.
    */
   def onError(cause: Throwable): Unit = {
     // By default, throw e and let RpcEnv handle it
@@ -87,21 +96,24 @@ private[spark] trait RpcEndpoint {
   }
 
   /**
-   * Invoked when `remoteAddress` is connected to the current node.
+   * 客户端与当前节点连接上之后调用,可以针对连接进行一些处理.
+    * Invoked when `remoteAddress` is connected to the current node.
    */
   def onConnected(remoteAddress: RpcAddress): Unit = {
     // By default, do nothing.
   }
 
   /**
-   * Invoked when `remoteAddress` is lost.
+   * 断开连接是可以进行一些处理
+    * Invoked when `remoteAddress` is lost.
    */
   def onDisconnected(remoteAddress: RpcAddress): Unit = {
     // By default, do nothing.
   }
 
   /**
-   * Invoked when some network error happens in the connection between the current node and
+   * 连接发生网络错误调用.
+    * Invoked when some network error happens in the connection between the current node and
    * `remoteAddress`.
    */
   def onNetworkError(cause: Throwable, remoteAddress: RpcAddress): Unit = {
@@ -109,14 +121,16 @@ private[spark] trait RpcEndpoint {
   }
 
   /**
-   * Invoked before [[RpcEndpoint]] starts to handle any message.
+   * RpcEndPoint开始处理消息之前调用,可以执行些准备工作
+    * Invoked before [[RpcEndpoint]] starts to handle any message.
    */
   def onStart(): Unit = {
     // By default, do nothing.
   }
 
   /**
-   * Invoked when [[RpcEndpoint]] is stopping. `self` will be `null` in this method and you cannot
+   * 停止当前RpcEndpoint.可以做一些收尾工作
+    * Invoked when [[RpcEndpoint]] is stopping. `self` will be `null` in this method and you cannot
    * use it to send or ask messages.
    */
   def onStop(): Unit = {
@@ -124,7 +138,8 @@ private[spark] trait RpcEndpoint {
   }
 
   /**
-   * A convenient method to stop [[RpcEndpoint]].
+   * 用于停止当前RpcEndpoint.
+    * A convenient method to stop [[RpcEndpoint]].
    */
   final def stop(): Unit = {
     val _self = self
@@ -135,7 +150,11 @@ private[spark] trait RpcEndpoint {
 }
 
 /**
- * A trait that requires RpcEnv thread-safely sending messages to it.
+ * 该特质要求RpcEnv在发送消息给他时是线程安全的.线程安全意味着,对于同一个线程安全的rpcEndPoint,
+  * 处理一个消息先于处理下一个消息.换言之,在处理一条消息时对内部成员变量的修改,对于下一条消息是可见的.
+  * 并且线程安全的RpcEnvPoint中的字段是瞬时的或恒等的.但是，
+  * 不能保证相同的线程将针对不同的消息执行相同的线程安全RpcEndpoint.<br>
+  * A trait that requires RpcEnv thread-safely sending messages to it.
  *
  * Thread-safety means processing of one message happens before processing of the next message by
  * the same [[ThreadSafeRpcEndpoint]]. In the other words, changes to internal fields of a

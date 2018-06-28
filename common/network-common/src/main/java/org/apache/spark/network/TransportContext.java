@@ -109,7 +109,9 @@ public class TransportContext {
     return new TransportServer(this, null, port, rpcHandler, bootstraps);
   }
 
-  /** Create a server which will attempt to bind to a specific host and port. */
+  /**
+   * 创建一个根据指定端口和主机的服务端
+   * Create a server which will attempt to bind to a specific host and port. */
   public TransportServer createServer(
       String host, int port, List<TransportServerBootstrap> bootstraps) {
     return new TransportServer(this, host, port, rpcHandler, bootstraps);

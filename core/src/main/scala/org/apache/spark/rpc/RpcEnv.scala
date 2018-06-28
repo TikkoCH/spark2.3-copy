@@ -55,6 +55,7 @@ private[spark] object RpcEnv {
       clientMode: Boolean): RpcEnv = {
     val config = RpcEnvConfig(conf, name, bindAddress, advertiseAddress, port, securityManager,
       numUsableCores, clientMode)
+    // 返回了RpcEnv子类NettyRpcEnv对象
     new NettyRpcEnvFactory().create(config)
   }
 }

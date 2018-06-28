@@ -25,29 +25,39 @@ import org.apache.spark.internal.Logging
 import org.apache.spark.util.RpcUtils
 
 /**
- * A reference for a remote [[RpcEndpoint]]. [[RpcEndpointRef]] is thread-safe.
+ *
+  * rpc通信端点RpcEndpoint的引用.rpcEndPointRef是线程安全的.
+  * A reference for a remote [[RpcEndpoint]]. [[RpcEndpointRef]] is thread-safe.
  */
 private[spark] abstract class RpcEndpointRef(conf: SparkConf)
   extends Serializable with Logging {
-
+  // 最大尝试次数.可通过spark.rpc.numRetries配置,默认3次.
   private[this] val maxRetries = RpcUtils.numRetries(conf)
+  // 重连等待时间.可通过spark.rpc.retry.wait配置,默认3秒
   private[this] val retryWaitMs = RpcUtils.retryWaitMs(conf)
+  // rpc的ask操作默认超时时间.
+  // 可通过spark.rpc.askTimeout(优先级高)或者spark.network.timeout配置.默认120秒
   private[this] val defaultAskTimeout = RpcUtils.askRpcTimeout(conf)
 
   /**
-   * return the address for the [[RpcEndpointRef]]
+   * 返回对应RpcEndpoint的Rpc地址.
+    * return the address for the [[RpcEndpointRef]]
    */
   def address: RpcAddress
-
+ // 返回对应RpcEndpoint的名称
   def name: String
 
   /**
-   * Sends a one-way asynchronous message. Fire-and-forget semantics.
+   * 发送单向异步消息.单向意味着不记录状态,也不期待得到客户端回复.对应actor模型中的at-most-once规则.
+    * 类似Akka中Actor的tell方法.<br>
+    * Sends a one-way asynchronous message. Fire-and-forget semantics.
    */
   def send(message: Any): Unit
 
   /**
-   * Send a message to the corresponding [[RpcEndpoint.receiveAndReply)]] and return a [[Future]] to
+   * 发送消息到RpcEndpoint中的receiveAndReply方法中并且返回一个Future来在指定时间内接收回复.
+    * 该方法只会发送一次并且不会重试.<br>
+    * Send a message to the corresponding [[RpcEndpoint.receiveAndReply)]] and return a [[Future]] to
    * receive the reply within the specified timeout.
    *
    * This method only sends the message once and never retries.
@@ -55,7 +65,9 @@ private[spark] abstract class RpcEndpointRef(conf: SparkConf)
   def ask[T: ClassTag](message: Any, timeout: RpcTimeout): Future[T]
 
   /**
-   * Send a message to the corresponding [[RpcEndpoint.receiveAndReply)]] and return a [[Future]] to
+   * 发送消息到RpcEndpoint中的receiveAndReply方法中并且返回一个Future来在指定时间内接收回复.
+    *  该方法只会发送一次并且不会重试.<br>
+    * Send a message to the corresponding [[RpcEndpoint.receiveAndReply)]] and return a [[Future]] to
    * receive the reply within a default timeout.
    *
    * This method only sends the message once and never retries.

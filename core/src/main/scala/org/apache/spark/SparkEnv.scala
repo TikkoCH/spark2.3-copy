@@ -317,7 +317,7 @@ object SparkEnv extends Logging {
     val mapOutputTracker = if (isDriver) {
       new MapOutputTrackerMaster(conf, broadcastManager, isLocal)//是driver创建master
     } else {
-      new MapOutputTrackerWorker(conf) //不是driver创建Worker
+      new MapOutputTrackerWorker(conf) // 不是driver创建Worker
     }
     // 必须在初始化之后将mapOutputTracker的trackerEndPoint指定为MapOutputTrackerEndpoint
     // Have to assign trackerEndpoint after initialization as MapOutputTrackerEndpoint

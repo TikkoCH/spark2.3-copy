@@ -2245,7 +2245,8 @@ private[spark] object Utils extends Logging {
   }
 
   /**
-   * Returns the user port to try when trying to bind a service. Handles wrapping and skipping
+   * 返回尝试绑定服务时要尝试的用户端口。 处理包装和跳过特权端口。
+    * Returns the user port to try when trying to bind a service. Handles wrapping and skipping
    * privileged ports.
    */
   def userPort(base: Int, offset: Int): Int = {
@@ -2253,40 +2254,51 @@ private[spark] object Utils extends Logging {
   }
 
   /**
-   * Attempt to start a service on the given port, or fail after a number of attempts.
+   * 尝试在指定的端口上启动服务,超过一定次数尝试后会失败.后续的尝试端口为当前失败端口号+1
+    * Attempt to start a service on the given port, or fail after a number of attempts.
    * Each subsequent attempt uses 1 + the port used in the previous attempt (unless the port is 0).
    *
-   * @param startPort The initial port to start the service on.
-   * @param startService Function to start service on a given port.
+   * @param startPort 启动服务的初始端口号.
+    *                  The initial port to start the service on.
+   * @param startService 用来在指定端口启动服务的函数.预期是会抛出java.net.BindException异常
+    *                     Function to start service on a given port.
    *                     This is expected to throw java.net.BindException on port collision.
-   * @param conf A SparkConf used to get the maximum number of retries when binding to a port.
-   * @param serviceName Name of the service.
-   * @return (service: T, port: Int)
+   * @param conf  SparkConf,用于获取最大尝试次数.
+    *             A SparkConf used to get the maximum number of retries when binding to a port.
+   * @param serviceName 服务的名称
+    *                    Name of the service.
+   * @return 返回(Service,端口号)元组
+    *         (service: T, port: Int)
    */
   def startServiceOnPort[T](
       startPort: Int,
       startService: Int => (T, Int),
       conf: SparkConf,
       serviceName: String = ""): (T, Int) = {
-
+    // 限制绑定一些固定端口号和0端口号
     require(startPort == 0 || (1024 <= startPort && startPort < 65536),
       "startPort should be between 1024 and 65535 (inclusive), or 0 for a random free port.")
-
+    // 空串或服务名称.
     val serviceString = if (serviceName.isEmpty) "" else s" '$serviceName'"
+    // 端口最大尝试次数
     val maxRetries = portMaxRetries(conf)
     for (offset <- 0 to maxRetries) {
       // Do not increment port if startPort is 0, which is treated as a special port
+      // 如果端口号是0的话就不递增了
       val tryPort = if (startPort == 0) {
         startPort
       } else {
         userPort(startPort, offset)
       }
       try {
+        // 通过传进来的函数生成service和port
         val (service, port) = startService(tryPort)
         logInfo(s"Successfully started service$serviceString on port $port.")
         return (service, port)
       } catch {
+        // 判断是否是端口绑定的异常
         case e: Exception if isBindCollision(e) =>
+          // 如果是端口绑定的异常并且尝试次数大于最大尝试次数,然后抛出异常
           if (offset >= maxRetries) {
             val exceptionMessage = if (startPort == 0) {
               s"${e.getMessage}: Service$serviceString failed after " +
@@ -2305,6 +2317,7 @@ private[spark] object Utils extends Logging {
             exception.setStackTrace(e.getStackTrace)
             throw exception
           }
+          // 如果端口是0,会生成一个随机端口,有可能端口不正确
           if (startPort == 0) {
             // As startPort 0 is for a random free port, it is most possibly binding address is
             // not correct.
@@ -2317,6 +2330,7 @@ private[spark] object Utils extends Logging {
       }
     }
     // Should never happen
+    // 超过尝试次数就直接抛出异常
     throw new SparkException(s"Failed to start service$serviceString on port $startPort")
   }
 
