@@ -18,24 +18,28 @@
 package org.apache.spark.rpc
 
 /**
- * A callback that [[RpcEndpoint]] can use to send back a message or failure. It's thread-safe
+ * RpcEndPoint用于返回消息或失败信息的回调.线程安全.
+  * A callback that [[RpcEndpoint]] can use to send back a message or failure. It's thread-safe
  * and can be called in any thread.
  */
 private[spark] trait RpcCallContext {
 
   /**
-   * Reply a message to the sender. If the sender is [[RpcEndpoint]], its [[RpcEndpoint.receive]]
+   * 用于向发送者回复消息.如果发送者是RpcEndPoint,其receive方法会被调用
+    * Reply a message to the sender. If the sender is [[RpcEndpoint]], its [[RpcEndpoint.receive]]
    * will be called.
    */
   def reply(response: Any): Unit
 
   /**
-   * Report a failure to the sender.
+   * 向发送者回复失败信息
+    * Report a failure to the sender.
    */
   def sendFailure(e: Throwable): Unit
 
   /**
-   * The sender of this message.
+   * 获取发送者的地址
+    * The sender of this message.
    */
   def senderAddress: RpcAddress
 }

@@ -92,6 +92,14 @@ private[netty] class Inbox(
   private var numActiveThreads = 0
 
   // OnStart should be the first message to process
+  /**
+    * Dispatcher注册RpcEndpoint时,会新创建EndPointData对象Dispatcher中放入RpcEndpoint名称和
+    * EndpointData的map缓存中.并会将EndpointData放入dispatcher对象中的receivers阻塞队列.
+    * 新创建EndPoint时,会创建其成员属性inboxreceivers中的消息会被MessageLoop线程不断消费,
+    * 消费方法就是调用EndpointData.inbox.process.所以,在创建inbox时,应该在消息中添加OnStart消息.
+    * 这样,当Dispatcher注册RpcEndpoint成功会开始处理inbox中的OnStart消息,
+    * process方法还会调用RpcEndpoint中的onStart方法.
+    */
   inbox.synchronized {
     // 向自身的messages列表中放入OnStart消息.
     messages.add(OnStart)
@@ -118,8 +126,10 @@ private[netty] class Inbox(
     }
     while (true) {
       safelyCall(endpoint) {
-        // 根据消息类型进行匹配
+        // 根据消息类型进行匹配,safelyCall的函数签名safelyCall(endpoint: RpcEndpoint)(action: => Unit)
+        // 花括号中的内容就是action函数
         message match {
+            // 根据消息的类型调用远端相应的方法
           case RpcMessage(_sender, content, context) =>
             try {
               endpoint.receiveAndReply(context).applyOrElse[Any, Unit](content, { msg =>
@@ -149,10 +159,13 @@ private[netty] class Inbox(
             }
 
           case OnStop =>
+            // 判断几个活动线程
             val activeThreads = inbox.synchronized { inbox.numActiveThreads }
             assert(activeThreads == 1,
               s"There should be only a single active thread but found $activeThreads threads.")
+            // 删除endpoint的ref
             dispatcher.removeRpcEndpointRef(endpoint)
+            // 调用endpoint的onStop方法.
             endpoint.onStop()
             assert(isEmpty, "OnStop should be the last message")
 
@@ -168,14 +181,17 @@ private[netty] class Inbox(
       }
 
       inbox.synchronized {
+        // 允许并发会在调用onStop方法之后设为false,所以我们应该检查
         // "enableConcurrent" will be set to false after `onStop` is called, so we should check it
         // every time.
         if (!enableConcurrent && numActiveThreads != 1) {
           // If we are not the only one worker, exit
+          // 如果不允许多个线程并且活动线程不等于一,那需要退出当前线程并将活动线程-1
           numActiveThreads -= 1
           return
         }
         message = messages.poll()
+        // 如果没有消息处理了,那也需要活动线程-1
         if (message == null) {
           numActiveThreads -= 1
           return
@@ -184,6 +200,11 @@ private[netty] class Inbox(
     }
   }
 
+  /**
+    * 将消息添加到Inbox中的消息列表
+    * 如果Inbox已经停止了,将拒收后续消息.否则就添加到消息列表中.
+    * @param message
+    */
   def post(message: InboxMessage): Unit = inbox.synchronized {
     if (stopped) {
       // We already put "OnStop" into "messages", so we should drop further messages
@@ -197,7 +218,10 @@ private[netty] class Inbox(
   def stop(): Unit = inbox.synchronized {
     // The following codes should be in `synchronized` so that we can make sure "OnStop" is the last
     // message
+    // 同步块确保了OnStop消息是最后的消息
     if (!stopped) {
+      // 需要禁止多线程属性.这样在RpcEndpoint.onStop被调用时,只有一个线程来处理消息.
+      // 所以RpcEndpoint.onStop可以安全地释放资源
       // We should disable concurrent here. Then when RpcEndpoint.onStop is called, it's the only
       // thread that is processing messages. So `RpcEndpoint.onStop` can release its resources
       // safely.
@@ -219,7 +243,9 @@ private[netty] class Inbox(
   }
 
   /**
-   * Calls action closure, and calls the endpoint's onError function in the case of exceptions.
+   * 闭包调用action函数,并且在异常情况下调用endpoint的onError函数.
+    * 这里的action函数也可能出现异常,所以进行了try catch.
+    * Calls action closure, and calls the endpoint's onError function in the case of exceptions.
    */
   private def safelyCall(endpoint: RpcEndpoint)(action: => Unit): Unit = {
     try action catch {

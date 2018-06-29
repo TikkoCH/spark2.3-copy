@@ -61,17 +61,21 @@ private[netty] class NettyRpcEnv(
 
   private def createClientBootstraps(): java.util.List[TransportClientBootstrap] = {
     if (securityManager.isAuthenticationEnabled()) {
+      // 如果该对象的securityManager开启了验证,就创建一个包含AuthClientBootstrap的List返回
       java.util.Arrays.asList(new AuthClientBootstrap(transportConf,
         securityManager.getSaslUser(), securityManager))
     } else {
+      // 否则返回空
       java.util.Collections.emptyList[TransportClientBootstrap]
     }
   }
-
+  // 用于常规发送请求和响应
   private val clientFactory = transportContext.createClientFactory(createClientBootstraps())
 
   /**
-   * A separate client factory for file downloads. This avoids using the same RPC handler as
+    * 用于文件下载的独立客户端工厂。 这样可以避免使用与主RPCContext相同的RPChandler，
+    * 以便由这些客户端引起的event与主要RPC通信保持隔离。 它还允许某些属性的不同配置，例如每个对等端的连接数。
+    * A separate client factory for file downloads. This avoids using the same RPC handler as
    * the main RPC context, so that events caused by these clients are kept isolated from the
    * main RPC traffic.
    *
@@ -353,14 +357,16 @@ private[netty] class NettyRpcEnv(
 
     source
   }
-
+  /** 用于下载的客户端*/
   private def downloadClient(host: String, port: Int): TransportClient = {
+    // 双重检查锁防止对象逃逸,访问到未构造完成的对象
     if (fileDownloadFactory == null) synchronized {
       if (fileDownloadFactory == null) {
+        // 所属模块为files
         val module = "files"
         val prefix = "spark.rpc.io."
         val clone = conf.clone()
-
+        // 添加配置文件,将spark.rpc.io改成spark.files.io.名称.
         // Copy any RPC configuration that is not overridden in the spark.files namespace.
         conf.getAll.foreach { case (key, value) =>
           if (key.startsWith(prefix)) {
@@ -375,6 +381,7 @@ private[netty] class NettyRpcEnv(
         fileDownloadFactory = downloadContext.createClientFactory(createClientBootstraps())
       }
     }
+    // 如果fileDownloadFactory!=null直接创建客户端对象
     fileDownloadFactory.createClient(host, port)
   }
 
@@ -605,10 +612,19 @@ private[netty] class RequestMessage(
 }
 
 private[netty] object RequestMessage {
-
+  /**
+    * 首先介绍一下DataInput和DataOutput.
+    * 该参数中的DataInputStream中的数据是通过DataOutput写出的.
+    * DataOutput写出顺序应该是 writeBoolean,WriteUtf,writeInt.
+    * 在该方法中的InputStream中数据的顺序是|bool|UTF|Int|,分别对应了是否可读,地址和端口.
+    * 所以下面的读取顺序能够读取到对应的信息,
+    * readBoolean读取是否有地址,然后读取地址,再读取端口号,构造RpcAddress对象.
+    */
   private def readRpcAddress(in: DataInputStream): RpcAddress = {
+    // 该流是否可读
     val hasRpcAddress = in.readBoolean()
     if (hasRpcAddress) {
+      // 读取地址和端口号
       RpcAddress(in.readUTF(), in.readInt())
     } else {
       null
@@ -616,17 +632,23 @@ private[netty] object RequestMessage {
   }
 
   def apply(nettyEnv: NettyRpcEnv, client: TransportClient, bytes: ByteBuffer): RequestMessage = {
+    // 根据bytes参数创建字节缓存流
     val bis = new ByteBufferInputStream(bytes)
     val in = new DataInputStream(bis)
     try {
+      // 创建RpcAddress对象
       val senderAddress = readRpcAddress(in)
+      // 创建端点的地址对象
       val endpointAddress = RpcEndpointAddress(readRpcAddress(in), in.readUTF())
+      // 然后根据env的配置,RpcEndpointAddress和nettyEnv创建远端引用
       val ref = new NettyRpcEndpointRef(nettyEnv.conf, endpointAddress, nettyEnv)
+      // 为ref设置TransportClient
       ref.client = client
       new RequestMessage(
         senderAddress,
         ref,
         // The remaining bytes in `bytes` are the message content.
+        // 在读取地址等信息之后,剩下的就是消息内容了,反序列化得到对象
         nettyEnv.deserialize(client, bytes))
     } finally {
       in.close()
@@ -663,6 +685,7 @@ private[netty] class NettyRpcHandler(
       client: TransportClient,
       message: ByteBuffer,
       callback: RpcResponseCallback): Unit = {
+    // 通过internalReceive方法获取requestMessage对象
     val messageToDispatch = internalReceive(client, message)
     dispatcher.postRemoteMessage(messageToDispatch, callback)
   }
@@ -671,13 +694,16 @@ private[netty] class NettyRpcHandler(
       client: TransportClient,
       message: ByteBuffer): Unit = {
     val messageToDispatch = internalReceive(client, message)
+    // 单向消息
     dispatcher.postOneWayMessage(messageToDispatch)
   }
 
   private def internalReceive(client: TransportClient, message: ByteBuffer): RequestMessage = {
+    // 通过client获取地址
     val addr = client.getChannel().remoteAddress().asInstanceOf[InetSocketAddress]
     assert(addr != null)
     val clientAddr = RpcAddress(addr.getHostString, addr.getPort)
+    // 创建RequestMessage
     val requestMessage = RequestMessage(nettyEnv, client, message)
     if (requestMessage.senderAddress == null) {
       // Create a new message with the socket address of the client as the sender.
@@ -687,6 +713,7 @@ private[netty] class NettyRpcHandler(
       // the listening address
       val remoteEnvAddress = requestMessage.senderAddress
       if (remoteAddresses.putIfAbsent(clientAddr, remoteEnvAddress) == null) {
+        // 最后调用postToALL方法向endpoints缓存中所有的EndpointData的Inbox中放入RemoteProcessConnected消息.
         dispatcher.postToAll(RemoteProcessConnected(remoteEnvAddress))
       }
       requestMessage
@@ -694,7 +721,7 @@ private[netty] class NettyRpcHandler(
   }
 
   override def getStreamManager: StreamManager = streamManager
-
+  //想Inbox中投递RemoteProcessConnectionError消息
   override def exceptionCaught(cause: Throwable, client: TransportClient): Unit = {
     val addr = client.getChannel.remoteAddress().asInstanceOf[InetSocketAddress]
     if (addr != null) {
@@ -720,7 +747,7 @@ private[netty] class NettyRpcHandler(
     val clientAddr = RpcAddress(addr.getHostString, addr.getPort)
     dispatcher.postToAll(RemoteProcessConnected(clientAddr))
   }
-
+  // 向Inbox中投递RemoteProcessDisconnected消息
   override def channelInactive(client: TransportClient): Unit = {
     val addr = client.getChannel.remoteAddress().asInstanceOf[InetSocketAddress]
     if (addr != null) {
