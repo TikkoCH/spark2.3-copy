@@ -28,6 +28,9 @@ import org.apache.spark.internal.Logging
 import org.apache.spark.network.client.{RpcResponseCallback, TransportClient}
 import org.apache.spark.rpc.{RpcAddress, RpcEnvStoppedException}
 
+/**
+  * 用于rpc客户端,向外发送消息.
+  */
 private[netty] sealed trait OutboxMessage {
 
   def sendWith(client: TransportClient): Unit
@@ -36,6 +39,10 @@ private[netty] sealed trait OutboxMessage {
 
 }
 
+/**
+  * 单向消息发送邮箱.
+  * @param content
+  */
 private[netty] case class OneWayOutboxMessage(content: ByteBuffer) extends OutboxMessage
   with Logging {
 
@@ -51,21 +58,24 @@ private[netty] case class OneWayOutboxMessage(content: ByteBuffer) extends Outbo
   }
 
 }
-
+// content:内容
+// _onFailure: 失败函数
+// _onSuccess: 成功函数
 private[netty] case class RpcOutboxMessage(
     content: ByteBuffer,
     _onFailure: (Throwable) => Unit,
     _onSuccess: (TransportClient, ByteBuffer) => Unit)
   extends OutboxMessage with RpcResponseCallback with Logging {
-
+  // 客户端对象
   private var client: TransportClient = _
+  // 请求id
   private var requestId: Long = _
-
+  // sendWith方法为两个字段复制,并调用了client的sendRpc方法.
   override def sendWith(client: TransportClient): Unit = {
     this.client = client
     this.requestId = client.sendRpc(content, this)
   }
-
+  // 超时如果client不为空,就删除请求.
   def onTimeout(): Unit = {
     if (client != null) {
       client.removeRpcRequest(requestId)
@@ -83,29 +93,32 @@ private[netty] case class RpcOutboxMessage(
   }
 
 }
-
+// nettyEnv:当前Outbox所在节点上的NettyRpcEnv
+// address:Outbox所对应的远端NettyRpcEnv地址.
 private[netty] class Outbox(nettyEnv: NettyRpcEnv, val address: RpcAddress) {
-
+  // 相当于this
   outbox => // Give this an alias so we can use it more clearly in closures.
-
+  // 向其他远端NettyRpcEnv上的RpcEndpoint发送的消息列表
   @GuardedBy("this")
   private val messages = new java.util.LinkedList[OutboxMessage]
-
+  // 当前Outbox内的TransportClient.用于消息发送
   @GuardedBy("this")
   private var client: TransportClient = null
 
   /**
-   * connectFuture points to the connect task. If there is no connect task, connectFuture will be
+   * 当前Outbox内连接任务的Future引用.如果没有连接则connectFuture为null.
+    * connectFuture points to the connect task. If there is no connect task, connectFuture will be
    * null.
    */
   @GuardedBy("this")
   private var connectFuture: java.util.concurrent.Future[Unit] = null
-
+  // 当前outbox是否是停止状态.
   @GuardedBy("this")
   private var stopped = false
 
   /**
-   * If there is any thread draining the message queue
+   * 是否有线程正在处理messages列表中消息
+    * If there is any thread draining the message queue
    */
   @GuardedBy("this")
   private var draining = false

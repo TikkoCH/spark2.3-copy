@@ -83,9 +83,13 @@ private[netty] class NettyRpcEnv(
    * connections per peer.
    */
   @volatile private var fileDownloadFactory: TransportClientFactory = _
-
+  /**
+    * 用于处理请求超时的调度器.类型是ScheduledExecutorService.
+    */
   val timeoutScheduler = ThreadUtils.newDaemonSingleThreadScheduledExecutor("netty-rpc-env-timeout")
 
+  // 因为TransportClientFactory.createClient方法是阻塞的,我们需要线程池来异步调用.
+  // 默认大小64,可通过spark.rpc.connect.threads配置
   // Because TransportClientFactory.createClient is blocking, we need to run it in this thread pool
   // to implement non-blocking send/ask.
   // TODO: a non-blocking TransportClientFactory.createClient in future
@@ -98,7 +102,8 @@ private[netty] class NettyRpcEnv(
   private val stopped = new AtomicBoolean(false)
 
   /**
-   * A map for [[RpcAddress]] and [[Outbox]]. When we are connecting to a remote [[RpcAddress]],
+   * RpcAddress和Outbox的映射map缓存.每次向远端发送请求时,此消息首先放入该缓存,然后使用线程异步发送.
+    * A map for [[RpcAddress]] and [[Outbox]]. When we are connecting to a remote [[RpcAddress]],
    * we just put messages to its [[Outbox]] to implement a non-blocking `send` method.
    */
   private val outboxes = new ConcurrentHashMap[RpcAddress, Outbox]()
@@ -130,7 +135,7 @@ private[netty] class NettyRpcEnv(
       }
     // 根据端口号和地址和引导器创建服务端
     server = transportContext.createServer(bindAddress, port, bootstraps)
-    // 注册rpc服务端点.
+    // 注册rpc服务端点.NAME=endpoint-verifier
     dispatcher.registerRpcEndpoint(
       RpcEndpointVerifier.NAME, new RpcEndpointVerifier(this, dispatcher))
   }
