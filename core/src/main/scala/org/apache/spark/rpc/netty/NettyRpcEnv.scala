@@ -509,7 +509,14 @@ private[rpc] class NettyRpcEnvFactory extends RpcEnvFactory with Logging {
 }
 
 /**
- * The NettyRpcEnv version of RpcEndpointRef.
+ * NettyRpcEnv版本的RpcEndpointRef.该类的行为取决于创建它的位置.
+  *  在拥有RpcEndpoint的节点上,该对象是一个简单的包装了RpcEndpointAddress实例的对象.
+  * 在其他接收引用序列化版本的机器上,表现就不同了.实例将跟踪发送引用的TransportClient，
+  * 以便通过客户端连接发送消息到endpoint，而不需要打开新的连接.
+  * 该引用的RpcAddress可以为null,意味着只有通过客户端连接引用才能使用,
+  * 因为持有endpoint的进程不是实时监听到来的连接.这些引用应该与第三方共享,
+  * 因为他们不会有向endpoint发送消息的能力. <br>
+  * The NettyRpcEnv version of RpcEndpointRef.
  *
  * This class behaves differently depending on where it's created. On the node that "owns" the
  * RpcEndpoint, it's a simple wrapper around the RpcEndpointAddress instance.
@@ -532,12 +539,12 @@ private[netty] class NettyRpcEndpointRef(
     @transient private val conf: SparkConf,
     private val endpointAddress: RpcEndpointAddress,
     @transient @volatile private var nettyEnv: NettyRpcEnv) extends RpcEndpointRef(conf) {
-
+  // TransportClient,用此向RpcEndpoint发送消息
   @transient @volatile var client: TransportClient = _
-
+  // RpcEndpoint的地址
   override def address: RpcAddress =
     if (endpointAddress.rpcAddress != null) endpointAddress.rpcAddress else null
-
+  //
   private def readObject(in: ObjectInputStream): Unit = {
     in.defaultReadObject()
     nettyEnv = NettyRpcEnv.currentEnv.value
@@ -547,13 +554,13 @@ private[netty] class NettyRpcEndpointRef(
   private def writeObject(out: ObjectOutputStream): Unit = {
     out.defaultWriteObject()
   }
-
+  // 对应RpcEndpoint的名称
   override def name: String = endpointAddress.name
-
+  // 封装message为RequestMessage,然后调用NettyRpcEnv的ask方法
   override def ask[T: ClassTag](message: Any, timeout: RpcTimeout): Future[T] = {
     nettyEnv.ask(new RequestMessage(nettyEnv.address, this, message), timeout)
   }
-
+  // 封装message为RequestMessage,然后调用NettyRpcEnv的send方法
   override def send(message: Any): Unit = {
     require(message != null, "Message is null")
     nettyEnv.send(new RequestMessage(nettyEnv.address, this, message))
