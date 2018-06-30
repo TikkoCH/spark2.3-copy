@@ -59,18 +59,21 @@ private[spark] object CompressionCodec {
     "lzf" -> classOf[LZFCompressionCodec].getName,
     "snappy" -> classOf[SnappyCompressionCodec].getName,
     "zstd" -> classOf[ZStdCompressionCodec].getName)
-
+  /** 获取解码器的名称,如果没有指定解码器,取默认值lz4*/
   def getCodecName(conf: SparkConf): String = {
+    // 如果没有指定解码器,取默认值lz4
     conf.get(configKey, DEFAULT_COMPRESSION_CODEC)
   }
 
   def createCodec(conf: SparkConf): CompressionCodec = {
     createCodec(conf, getCodecName(conf))
   }
-
+  /**  根据名称创建解码实例*/
   def createCodec(conf: SparkConf, codecName: String): CompressionCodec = {
+    // 先获取解码器的类名
     val codecClass =
       shortCompressionCodecNames.getOrElse(codecName.toLowerCase(Locale.ROOT), codecName)
+    // 反射创建对象
     val codec = try {
       val ctor = Utils.classForName(codecClass).getConstructor(classOf[SparkConf])
       Some(ctor.newInstance(conf).asInstanceOf[CompressionCodec])

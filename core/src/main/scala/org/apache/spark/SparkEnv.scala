@@ -292,13 +292,13 @@ object SparkEnv extends Logging {
       instantiateClass[T](conf.get(propertyName, defaultClassName))
     }
 
-    // 通过上面的方法获取序列化对象
+    // 通过上面的方法获取序列化对象,可通过配置指定spark.serializer
     val serializer = instantiateClassFromConf[Serializer](
       "spark.serializer", "org.apache.spark.serializer.JavaSerializer")
     logDebug(s"Using serializer: ${serializer.getClass}")
-    //创建序列化管理对象
+    // 创建序列化管理对象
     val serializerManager = new SerializerManager(serializer, conf, ioEncryptionKey)
-
+    // closureSerializer类型固定为JavaSerializer,不能通过配置指定
     val closureSerializer = new JavaSerializer(conf)
     //注册或查找endPoint
     def registerOrLookupEndpoint(

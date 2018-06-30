@@ -29,23 +29,27 @@ import org.apache.spark.storage._
 import org.apache.spark.util.io.{ChunkedByteBuffer, ChunkedByteBufferOutputStream}
 
 /**
- * Component which configures serialization, compression and encryption for various Spark
+ * 为各种spark组件配置序列化,压缩和加密的组件,包括自动选择用于shuffle的Serializer
+  * Component which configures serialization, compression and encryption for various Spark
  * components, including automatic selection of which [[Serializer]] to use for shuffles.
  */
 private[spark] class SerializerManager(
+    // 默认序列化器,
     defaultSerializer: Serializer,
     conf: SparkConf,
+    // 加密使用的密钥
     encryptionKey: Option[Array[Byte]]) {
 
   def this(defaultSerializer: Serializer, conf: SparkConf) = this(defaultSerializer, conf, None)
-
+  // google提供的库实现的序列化器
   private[this] val kryoSerializer = new KryoSerializer(conf)
 
   def setDefaultClassLoader(classLoader: ClassLoader): Unit = {
     kryoSerializer.setDefaultClassLoader(classLoader)
   }
-
+  // 字符串类型标记
   private[this] val stringClassTag: ClassTag[String] = implicitly[ClassTag[String]]
+  // 原始数据类型和原始数据类型数组的标记
   private[this] val primitiveAndPrimitiveArrayClassTags: Set[ClassTag[_]] = {
     val primitiveClassTags = Set[ClassTag[_]](
       ClassTag.Boolean,
@@ -61,25 +65,38 @@ private[spark] class SerializerManager(
     val arrayClassTags = primitiveClassTags.map(_.wrap)
     primitiveClassTags ++ arrayClassTags
   }
-
+  // 是否对广播对象进行压缩
   // Whether to compress broadcast variables that are stored
   private[this] val compressBroadcast = conf.getBoolean("spark.broadcast.compress", true)
+  // 是否对Shuffle数据进行压缩
   // Whether to compress shuffle output that are stored
   private[this] val compressShuffle = conf.getBoolean("spark.shuffle.compress", true)
+  // 时候对RDD进行压缩
   // Whether to compress RDD partitions that are stored serialized
   private[this] val compressRdds = conf.getBoolean("spark.rdd.compress", false)
+  // 是否对溢出到磁盘的shuffle数据进行压缩.
   // Whether to compress shuffle output temporarily spilled to disk
   private[this] val compressShuffleSpill = conf.getBoolean("spark.shuffle.spill.compress", true)
 
-  /* The compression codec to use. Note that the "lazy" val is necessary because we want to delay
+  /*
+   * 使用的压缩解码器.必须使用延迟加载,因为我们想将压缩解码器的初始化推迟到第一次使用的时候.
+   * 原因是Spark程序可能使用用户自定义解码器的第三方jar包加载到executor中.当BlockManager初始化的时候,
+   * 用户级别的jar包还没有被加载.
+   * The compression codec to use. Note that the "lazy" val is necessary because we want to delay
    * the initialization of the compression codec until it is first used. The reason is that a Spark
    * program could be using a user-defined codec in a third party jar, which is loaded in
    * Executor.updateDependencies. When the BlockManager is initialized, user level jars hasn't been
    * loaded yet. */
   private lazy val compressionCodec: CompressionCodec = CompressionCodec.createCodec(conf)
-
+  /** 是否支持加密,如果想要支持加密,必须在构造SerializerManager的时候传入encryptionKey.
+    * 可以通过spark.io.encryption.enabled(允许加密)
+    * spark.io.encryption.keySizeBits(密钥长度,有128,192,256三种长度.
+    * spark.io.encryption.keygen.algorithm(加密算法,默认HmacSHA1)等进行具体配置.
+    * */
   def encryptionEnabled: Boolean = encryptionKey.isDefined
-
+  /** 对于指定的类型(ct),能否使用kryoSerializer进行序列化.
+    * 当类型标记属于primitiveAndPrimitiveArrayClassTags,返回true.
+    * */
   def canUseKryo(ct: ClassTag[_]): Boolean = {
     primitiveAndPrimitiveArrayClassTags.contains(ct) || ct == stringClassTag
   }

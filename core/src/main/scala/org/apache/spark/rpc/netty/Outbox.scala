@@ -277,7 +277,8 @@ private[netty] class Outbox(nettyEnv: NettyRpcEnv, val address: RpcAddress) {
   }
 
   /**
-   * Stop [[Outbox]]. The remaining messages in the [[Outbox]] will be notified with a
+   * 停止Outbox.剩余的消息会通过SparkException进行通知.
+    * Stop [[Outbox]]. The remaining messages in the [[Outbox]] will be notified with a
    * [[SparkException]].
    */
   def stop(): Unit = {
@@ -285,13 +286,15 @@ private[netty] class Outbox(nettyEnv: NettyRpcEnv, val address: RpcAddress) {
       if (stopped) {
         return
       }
+      // 将stopped状态设为true,如果connectFuture不为null,取消
       stopped = true
       if (connectFuture != null) {
         connectFuture.cancel(true)
       }
+      // 关闭outbox中的transportclient.
       closeClient()
     }
-
+    // 清空messages列表中的消息
     // We always check `stopped` before updating messages, so here we can make sure no thread will
     // update messages and it's safe to just drain the queue.
     var message = messages.poll()

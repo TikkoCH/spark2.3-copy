@@ -94,7 +94,7 @@ private[netty] class Dispatcher(nettyEnv: NettyRpcEnv, numUsableCores: Int) exte
     }
     endpointRef // 最后返回了NettyRpcEndpointRef
   }
-
+  /** 从缓存中获取endpointref*/
   def getRpcEndpointRef(endpoint: RpcEndpoint): RpcEndpointRef = endpointRefs.get(endpoint)
 
   def removeRpcEndpointRef(endpoint: RpcEndpoint): Unit = endpointRefs.remove(endpoint)

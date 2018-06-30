@@ -144,16 +144,17 @@ private[netty] class NettyRpcEnv(
   override lazy val address: RpcAddress = {
     if (server != null) RpcAddress(host, server.getPort()) else null
   }
-
+  // 根据name和endpoint向dispatcher注册endpointref
   override def setupEndpoint(name: String, endpoint: RpcEndpoint): RpcEndpointRef = {
     dispatcher.registerRpcEndpoint(name, endpoint)
   }
-
+  // 异步获取endpointref
   def asyncSetupEndpointRefByURI(uri: String): Future[RpcEndpointRef] = {
     val addr = RpcEndpointAddress(uri)
     val endpointRef = new NettyRpcEndpointRef(conf, addr, this)
     val verifier = new NettyRpcEndpointRef(
       conf, RpcEndpointAddress(addr.rpcAddress, RpcEndpointVerifier.NAME), this)
+    // 向远端发送CheckExistence类型消息
     verifier.ask[Boolean](RpcEndpointVerifier.CheckExistence(endpointRef.name)).flatMap { find =>
       if (find) {
         Future.successful(endpointRef)
@@ -162,21 +163,26 @@ private[netty] class NettyRpcEnv(
       }
     }(ThreadUtils.sameThread)
   }
-
+  // 调用dispatcher中的stop,注销endpoint
   override def stop(endpointRef: RpcEndpointRef): Unit = {
     require(endpointRef.isInstanceOf[NettyRpcEndpointRef])
     dispatcher.stop(endpointRef)
   }
-
+  // 用于向Outbox中发送消息
   private def postToOutbox(receiver: NettyRpcEndpointRef, message: OutboxMessage): Unit = {
+    // 如果transportclient不为null
     if (receiver.client != null) {
+      // 直接调用OutboxMessage的sendwith方法
       message.sendWith(receiver.client)
     } else {
+      // 如果receiver地址为空,抛异常
       require(receiver.address != null,
         "Cannot send message to client endpoint with no listen address.")
       val targetOutbox = {
+        // 获取地址相应的outbox
         val outbox = outboxes.get(receiver.address)
         if (outbox == null) {
+          // 如果没有对应的outbox,新建outbox,放入缓存
           val newOutbox = new Outbox(this, receiver.address)
           val oldOutbox = outboxes.putIfAbsent(receiver.address, newOutbox)
           if (oldOutbox == null) {
@@ -189,25 +195,30 @@ private[netty] class NettyRpcEnv(
         }
       }
       if (stopped.get) {
+        // 如果已经停止,那么将地址对应的outbox从缓存中移除,并且终止outbox.
         // It's possible that we put `targetOutbox` after stopping. So we need to clean it.
         outboxes.remove(receiver.address)
         targetOutbox.stop()
       } else {
+        // 没停止就发送消息
         targetOutbox.send(message)
       }
     }
   }
 
   private[netty] def send(message: RequestMessage): Unit = {
+    // 如果是本地消息
     val remoteAddr = message.receiver.address
     if (remoteAddr == address) {
       // Message to a local RPC endpoint.
       try {
+        // 单向消息
         dispatcher.postOneWayMessage(message)
       } catch {
         case e: RpcEnvStoppedException => logDebug(e.getMessage)
       }
     } else {
+      // 设置接收地址的单项消息
       // Message to a remote RPC endpoint.
       postToOutbox(message.receiver, OneWayOutboxMessage(message.serialize(this)))
     }
@@ -218,9 +229,10 @@ private[netty] class NettyRpcEnv(
   }
 
   private[netty] def ask[T: ClassTag](message: RequestMessage, timeout: RpcTimeout): Future[T] = {
+    // promise是scala语言中一种用于异步处理的对象,可以看做一个future的容器.
     val promise = Promise[Any]()
     val remoteAddr = message.receiver.address
-
+    // 定义失败和成功的函数
     def onFailure(e: Throwable): Unit = {
       if (!promise.tryFailure(e)) {
         e match {
@@ -239,24 +251,30 @@ private[netty] class NettyRpcEnv(
     }
 
     try {
+      // 如果请求消息的接受者地址与当前env的地址相同,说明是本地消息
       if (remoteAddr == address) {
+        // 新建promise对象,为promise的future设置回调函数
         val p = Promise[Any]()
         p.future.onComplete {
           case Success(response) => onSuccess(response)
           case Failure(e) => onFailure(e)
         }(ThreadUtils.sameThread)
+        // 然后通过dispatcher发送本地消息
         dispatcher.postLocalMessage(message, p)
       } else {
+        // 非本地请求,将message序列化,然后将onFailure和onSuccess封装成outboxmessage类型.
         val rpcMessage = RpcOutboxMessage(message.serialize(this),
           onFailure,
           (client, response) => onSuccess(deserialize[Any](client, response)))
+        // 发送消息
         postToOutbox(message.receiver, rpcMessage)
+        // 处理超时信息
         promise.future.failed.foreach {
           case _: TimeoutException => rpcMessage.onTimeout()
           case _ =>
         }(ThreadUtils.sameThread)
       }
-
+      // 超时定时器,用于超时处理,等待指定时间抛出TimeoutException
       val timeoutCancelable = timeoutScheduler.schedule(new Runnable {
         override def run(): Unit = {
           onFailure(new TimeoutException(s"Cannot receive any reply from ${remoteAddr} " +
@@ -264,12 +282,14 @@ private[netty] class NettyRpcEnv(
         }
       }, timeout.duration.toNanos, TimeUnit.NANOSECONDS)
       promise.future.onComplete { v =>
+        // 指定时间内处理完毕则取消超时定时器
         timeoutCancelable.cancel(true)
       }(ThreadUtils.sameThread)
     } catch {
       case NonFatal(e) =>
         onFailure(e)
     }
+    // 返回future
     promise.future.mapTo[T].recover(timeout.addMessageIfTimeout)(ThreadUtils.sameThread)
   }
 
@@ -291,7 +311,7 @@ private[netty] class NettyRpcEnv(
       }
     }
   }
-
+  // 通过Dispatcher中的getRpcEndpointRef方法获取RpcEndpointRef
   override def endpointRef(endpoint: RpcEndpoint): RpcEndpointRef = {
     dispatcher.getRpcEndpointRef(endpoint)
   }
