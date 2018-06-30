@@ -100,10 +100,15 @@ private[spark] class SerializerManager(
   def canUseKryo(ct: ClassTag[_]): Boolean = {
     primitiveAndPrimitiveArrayClassTags.contains(ct) || ct == stringClassTag
   }
-
+  //由于SPARK-13990中的功能现在无法应用于Spark Streaming。
+  // 不幸的是基于`Receiver`模式的streaming job无法在Spark 2.x上正常运行。
+  // 在第一步中关闭流媒体的“kryo auto pick”功能可能是一个合理的选择。
   // SPARK-18617: As feature in SPARK-13990 can not be applied to Spark Streaming now. The worst
   // result is streaming job based on `Receiver` mode can not run on Spark 2.x properly. It may be
   // a rational choice to close `kryo auto pick` feature for streaming in the first step.
+  /** 获取序列化器.如果autoPick为true(BlockId不等于StreamBlockId时),
+    * 并且canUseKryo结果为true时选择kryoSerializer,否则defaultSerializer.
+    * */
   def getSerializer(ct: ClassTag[_], autoPick: Boolean): Serializer = {
     if (autoPick && canUseKryo(ct)) {
       kryoSerializer
@@ -113,7 +118,9 @@ private[spark] class SerializerManager(
   }
 
   /**
-   * Pick the best serializer for shuffling an RDD of key-value pairs.
+   * 获取序列化器,(canUseKryo(keyClassTag) && canUseKryo(valueClassTag))为true使用kryo,
+    * 否则默认序列化器.
+    * Pick the best serializer for shuffling an RDD of key-value pairs.
    */
   def getSerializer(keyClassTag: ClassTag[_], valueClassTag: ClassTag[_]): Serializer = {
     if (canUseKryo(keyClassTag) && canUseKryo(valueClassTag)) {
@@ -135,21 +142,24 @@ private[spark] class SerializerManager(
   }
 
   /**
-   * Wrap an input stream for encryption and compression
+   * 对Block输入流进行压缩加密
+    * Wrap an input stream for encryption and compression
    */
   def wrapStream(blockId: BlockId, s: InputStream): InputStream = {
     wrapForCompression(blockId, wrapForEncryption(s))
   }
 
   /**
-   * Wrap an output stream for encryption and compression
+   * 对Block输出流进行压缩加密
+    * Wrap an output stream for encryption and compression
    */
   def wrapStream(blockId: BlockId, s: OutputStream): OutputStream = {
     wrapForCompression(blockId, wrapForEncryption(s))
   }
 
   /**
-   * Wrap an input stream for encryption if shuffle encryption is enabled
+   * 如果shuffle加密可用,对输入流加密.
+    * Wrap an input stream for encryption if shuffle encryption is enabled
    */
   def wrapForEncryption(s: InputStream): InputStream = {
     encryptionKey
@@ -158,7 +168,8 @@ private[spark] class SerializerManager(
   }
 
   /**
-   * Wrap an output stream for encryption if shuffle encryption is enabled
+   * 如果shuffle加密可用,对输出流加密.
+    * Wrap an output stream for encryption if shuffle encryption is enabled
    */
   def wrapForEncryption(s: OutputStream): OutputStream = {
     encryptionKey
@@ -167,20 +178,24 @@ private[spark] class SerializerManager(
   }
 
   /**
-   * Wrap an output stream for compression if block compression is enabled for its block type
+   * 对于block对应类型压缩可用的话,压缩输出流.
+    * Wrap an output stream for compression if block compression is enabled for its block type
    */
   def wrapForCompression(blockId: BlockId, s: OutputStream): OutputStream = {
     if (shouldCompress(blockId)) compressionCodec.compressedOutputStream(s) else s
   }
 
   /**
-   * Wrap an input stream for compression if block compression is enabled for its block type
+   * 对于block对应类型压缩可用的话,压缩输入流.
+    * Wrap an input stream for compression if block compression is enabled for its block type
    */
   def wrapForCompression(blockId: BlockId, s: InputStream): InputStream = {
     if (shouldCompress(blockId)) compressionCodec.compressedInputStream(s) else s
   }
 
-  /** Serializes into a stream. */
+  /**
+    * 对block输出流序列化
+    * Serializes into a stream. */
   def dataSerializeStream[T: ClassTag](
       blockId: BlockId,
       outputStream: OutputStream,
@@ -191,14 +206,18 @@ private[spark] class SerializerManager(
     ser.serializeStream(wrapForCompression(blockId, byteStream)).writeAll(values).close()
   }
 
-  /** Serializes into a chunked byte buffer. */
+  /**
+    * 对block输入流序列化
+    * Serializes into a chunked byte buffer. */
   def dataSerialize[T: ClassTag](
       blockId: BlockId,
       values: Iterator[T]): ChunkedByteBuffer = {
     dataSerializeWithExplicitClassTag(blockId, values, implicitly[ClassTag[T]])
   }
 
-  /** Serializes into a chunked byte buffer. */
+  /**
+    * 使用明确的类型标记,序列化成分块的字节缓冲区
+    * Serializes into a chunked byte buffer. */
   def dataSerializeWithExplicitClassTag(
       blockId: BlockId,
       values: Iterator[_],
@@ -212,7 +231,9 @@ private[spark] class SerializerManager(
   }
 
   /**
-   * Deserializes an InputStream into an iterator of values and disposes of it when the end of
+   *
+    * 将输入流反序列化为值的迭代器
+    * Deserializes an InputStream into an iterator of values and disposes of it when the end of
    * the iterator is reached.
    */
   def dataDeserializeStream[T](
