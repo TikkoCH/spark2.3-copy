@@ -16,7 +16,7 @@
  */
 
 package org.apache.spark.broadcast
-
+// scalastyle:off
 import java.io._
 import java.nio.ByteBuffer
 import java.util.zip.Adler32
@@ -65,9 +65,14 @@ private[spark] class TorrentBroadcast[T: ClassTag](obj: T, id: Long)
    */
   @transient private lazy val _value: T = readBroadcastBlock()
 
-  /** The compression codec to use, or None if compression is disabled */
+  /**
+    * 使用的压缩编解码器.如果禁用的话就是空.可以通过spark.broadcast.compress设置.默认true.
+    * 默认解码器和Serializer中的CompressionCodec是一致的.
+    * The compression codec to use, or None if compression is disabled */
   @transient private var compressionCodec: Option[CompressionCodec] = _
-  /** Size of each block. Default value is 4MB.  This value is only read by the broadcaster. */
+  /**
+    * 每个块的大小.默认是4mb.broadcaster的只读属性.可通过spark.broadcast.blockSize设置.
+    * Size of each block. Default value is 4MB.  This value is only read by the broadcaster. */
   @transient private var blockSize: Int = _
 
   private def setConf(conf: SparkConf) {
@@ -81,10 +86,12 @@ private[spark] class TorrentBroadcast[T: ClassTag](obj: T, id: Long)
     checksumEnabled = conf.getBoolean("spark.broadcast.checksum", true)
   }
   setConf(SparkEnv.get.conf)
-
+  // 广播id.id是BroadcastManager的原子变量nextBroadCastId自增产生的
   private val broadcastId = BroadcastBlockId(id)
 
-  /** Total number of blocks this broadcast variable contains. */
+  /**
+    * 
+    * Total number of blocks this broadcast variable contains. */
   private val numBlocks: Int = writeBlocks(obj)
 
   /** Whether to generate checksum for blocks or not. */

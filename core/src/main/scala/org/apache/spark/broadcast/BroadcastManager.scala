@@ -25,7 +25,7 @@ import org.apache.commons.collections.map.{AbstractReferenceMap, ReferenceMap}
 
 import org.apache.spark.{SecurityManager, SparkConf}
 import org.apache.spark.internal.Logging
-
+// scalastyle:off
 /**
   * 用于將配置信息序列化后的RDD,job及shuffleDependency等信息在本地存儲.
   * 如果爲了容災,也會複製到其他節點上.
@@ -44,10 +44,11 @@ private[spark] class BroadcastManager(
   private var broadcastFactory: BroadcastFactory = null
   // 构造BroadcastManager对象时,会执行该方法.
   initialize()
-
+  // 在使用广播变量之前会被SparkContext或Executor调用
   // Called by SparkContext or Executor before using Broadcast
   private def initialize() {
     synchronized {
+      // 如果没有初始化TorrentBroadcastFactory作为工厂.然后通过工厂初始化.
       if (!initialized) {
         broadcastFactory = new TorrentBroadcastFactory
         broadcastFactory.initialize(isDriver, conf, securityManager)
@@ -65,7 +66,7 @@ private[spark] class BroadcastManager(
   private[broadcast] val cachedValues = {
     new ReferenceMap(AbstractReferenceMap.HARD, AbstractReferenceMap.WEAK)
   }
-
+  /** 用于生成TorrentBroadcast实例*/
   def newBroadcast[T: ClassTag](value_ : T, isLocal: Boolean): Broadcast[T] = {
     broadcastFactory.newBroadcast[T](value_, isLocal, nextBroadcastId.getAndIncrement())
   }
