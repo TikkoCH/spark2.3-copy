@@ -68,19 +68,21 @@ import org.apache.spark.util.Utils
  * [options] represent the specific property of this source or sink.
  */
 private[spark] class MetricsSystem private (
-    val instance: String,
+    val instance: String,  // 实例名称
     conf: SparkConf,
     securityMgr: SecurityManager)
   extends Logging {
-
+  // 度量系统的配置信息.MetricsConfig提供了对配置的设置,加载,转换等功能.其中也包含Sink和Source.
   private[this] val metricsConfig = new MetricsConfig(conf)
-
+  // 参考flume的sink概念,就是输出目的地的意思
   private val sinks = new mutable.ArrayBuffer[Sink]
+  // 参考flume的source概念,就是数据源.
   private val sources = new mutable.ArrayBuffer[Source]
+  // 用于度量系统的注册.source和sink都是通过其注册到度量仓库中的.
   private val registry = new MetricRegistry()
-
+  // 标记当前MetricsSystem是否正在运行.
   private var running: Boolean = false
-
+  // 添加到ServletContextHandler后可通过webUi展示.
   // Treat MetricsServlet as a special sink as it should be exposed to add handlers to web ui
   private var metricsServlet: Option[MetricsServlet] = None
 
@@ -227,6 +229,7 @@ private[spark] object MetricsSystem {
         " below than minimal polling period ")
     }
   }
+
 
   def createMetricsSystem(
       instance: String, conf: SparkConf, securityMgr: SecurityManager): MetricsSystem = {

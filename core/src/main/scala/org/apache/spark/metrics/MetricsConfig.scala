@@ -33,8 +33,9 @@ private[spark] class MetricsConfig(conf: SparkConf) extends Logging {
   private val DEFAULT_PREFIX = "*"
   private val INSTANCE_REGEX = "^(\\*|[a-zA-Z]+)\\.(.+)".r
   private val DEFAULT_METRICS_CONF_FILENAME = "metrics.properties"
-
+  // 度量属性信息
   private[metrics] val properties = new Properties()
+  // 每个实例的子属性,缓存每个实例与其属性的映射关系
   private[metrics] var perInstanceSubProperties: mutable.HashMap[String, Properties] = null
 
   private def setDefaultProperties(prop: Properties) {

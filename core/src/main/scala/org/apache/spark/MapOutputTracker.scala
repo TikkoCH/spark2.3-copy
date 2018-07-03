@@ -160,7 +160,10 @@ private class ShuffleStatus(numPartitions: Int) {
   }
 
   /**
-   * Serializes the mapStatuses array into an efficient compressed format. See the comments on
+   * 将mapstatus数组序列化放入一个高效的压缩格式.该方法可供多次请求,并且实现了缓存能够对后续请求提速.
+    * 如果缓存是空的并且多个线程同时尝试序列化map status,那么只有一个线程会进行序列化并且其他线程会
+    * 一直阻塞,知道可以访问缓存中的数据.
+    * Serializes the mapStatuses array into an efficient compressed format. See the comments on
    * `MapOutputTracker.serializeMapStatuses()` for more details on the serialization format.
    *
    * This method is designed to be called multiple times and implements caching in order to speed
@@ -173,6 +176,7 @@ private class ShuffleStatus(numPartitions: Int) {
       isLocal: Boolean,
       minBroadcastSize: Int): Array[Byte] = synchronized {
     if (cachedSerializedMapStatus eq null) {
+      // 通过MapOutputTracker.serializeMapStatuses进行序列化,返回(Array[Byte], Broadcast[Array[Byte]])
       val serResult = MapOutputTracker.serializeMapStatuses(
           mapStatuses, broadcastManager, isLocal, minBroadcastSize)
       cachedSerializedMapStatus = serResult._1
@@ -218,22 +222,28 @@ private[spark] case object StopMapOutputTracker extends MapOutputTrackerMessage
 
 private[spark] case class GetMapOutputMessage(shuffleId: Int, context: RpcCallContext)
 
-/** RpcEndpoint class for MapOutputTrackerMaster */
+/**
+  * 用于接收获取map中间状态和停止对中间状态进行跟踪的请求
+  * RpcEndpoint class for MapOutputTrackerMaster */
 private[spark] class MapOutputTrackerMasterEndpoint(
     override val rpcEnv: RpcEnv, tracker: MapOutputTrackerMaster, conf: SparkConf)
   extends RpcEndpoint with Logging {
 
   logDebug("init") // force eager creation of logger
-
+  // 用于回复状态请求
   override def receiveAndReply(context: RpcCallContext): PartialFunction[Any, Unit] = {
+    // 获取map中间输出状态的请求
     case GetMapOutputStatuses(shuffleId: Int) =>
       val hostPort = context.senderAddress.hostPort
       logInfo("Asked to send map output locations for shuffle " + shuffleId + " to " + hostPort)
+      // 通过tracker发送GetMapOutputMessage消息,会被MessageLoop线程处理
       val mapOutputStatuses = tracker.post(new GetMapOutputMessage(shuffleId, context))
-
+    // 停止跟踪请求
     case StopMapOutputTracker =>
       logInfo("MapOutputTrackerMasterEndpoint stopped!")
+      // 先向客户端返回true
       context.reply(true)
+      // 再调用stop方法,停止MapOutputTrackerMaster
       stop()
   }
 }
@@ -351,36 +361,47 @@ private[spark] class MapOutputTrackerMaster(
     * Whether to compute locality preferences for reduce tasks */
   private val shuffleLocalityEnabled = conf.getBoolean("spark.shuffle.reduceLocality.enabled", true)
 
+  // map和reduce任务的数量，我们不根据map输出大小分配首选位置.
+  // 我们限制分配首选位置的作业的大小，因为按大小计算顶部位置代价昂贵。
   // Number of map and reduce tasks above which we do not assign preferred locations based on map
   // output sizes. We limit the size of jobs for which assign preferred locations as computing the
   // top locations by size becomes expensive.
   private val SHUFFLE_PREF_MAP_THRESHOLD = 1000
+  // 这个值应该小于2000,因为我们使用的高度压缩的MapStatus
   // NOTE: This should be less than 2000 as we use HighlyCompressedMapStatus beyond that
   private val SHUFFLE_PREF_REDUCE_THRESHOLD = 1000
-
+  // map总输出的因子,必须位于某个节点用于执行reduce任务的首选节点.
+  // 如果该值更大,会集中在那些可以本地读取大多数据的少量的节点上,如果这些节点繁忙,可能会导致调度延迟
   // Fraction of total map output that must be at a location for it to considered as a preferred
   // location for a reduce task. Making this larger will focus on fewer locations where most data
   // can be read locally, but may lead to more delay in scheduling if those locations are busy.
   private val REDUCER_PREF_LOCS_FRACTION = 0.2
 
+  // 用于存储Driver中shuffleStatuses的hashmap.这些状态只有显式调用注销才会删除.公开属性用于测试.
   // HashMap for storing shuffleStatuses in the driver.
   // Statuses are dropped only by explicit de-registering.
   // Exposed for testing
   val shuffleStatuses = new ConcurrentHashMap[Int, ShuffleStatus]().asScala
-
+  // 最大Rpc消息的大小.可通过spark.rpc.message.maxSize设置,默认128Mb.
   private val maxRpcMessageSize = RpcUtils.maxMessageSizeBytes(conf)
-
+  // 输出状态的请求队列.消息类型GetMapOutputMessage.
   // requests for map output statuses
   private val mapOutputRequests = new LinkedBlockingQueue[GetMapOutputMessage]
-
+  // 用于获取map输出的固定大小线程池,用于处理map output status请求.
+  // 这是一个单独的线程池，以确保不会阻塞正常的dispatcher线程.名称以map-output-dispatcher前缀.
+  // 可通过spark.shuffle.mapOutput.dispatcher.numThreads配置,默认是8
   // Thread pool used for handling map output status requests. This is a separate thread pool
   // to ensure we don't block the normal dispatcher threads.
   private val threadpool: ThreadPoolExecutor = {
+    // 获取线程池大小.默认8
     val numThreads = conf.getInt("spark.shuffle.mapOutput.dispatcher.numThreads", 8)
+    // 创建线程池.
     val pool = ThreadUtils.newDaemonFixedThreadPool(numThreads, "map-output-dispatcher")
+    // 每个任务都执行MessageLoop
     for (i <- 0 until numThreads) {
       pool.execute(new MessageLoop)
     }
+    // 返回线程池引用
     pool
   }
 
@@ -393,19 +414,23 @@ private[spark] class MapOutputTrackerMaster(
     logError(msg)
     throw new IllegalArgumentException(msg)
   }
-
+  // 该方法将GetMapOutputMessage放入mapOutputRequests队列,这些消息会被messageloop线程进行处理.
   def post(message: GetMapOutputMessage): Unit = {
     mapOutputRequests.offer(message)
   }
 
-  /** Message loop used for dispatching messages. */
+  /**
+    * 用于转发消息的线程.
+    * Message loop used for dispatching messages. */
   private class MessageLoop extends Runnable {
     override def run(): Unit = {
       try {
         while (true) {
           try {
+            // 从消息阻塞队列中获取
             val data = mapOutputRequests.take()
              if (data == PoisonPill) {
+               // 再把停止标志放进去,保持对别的线程可见
               // Put PoisonPill back so that other MessageLoops can see it.
               mapOutputRequests.offer(PoisonPill)
               return
@@ -416,6 +441,7 @@ private[spark] class MapOutputTrackerMaster(
             logDebug("Handling request to send map output locations for shuffle " + shuffleId +
               " to " + hostPort)
             val shuffleStatus = shuffleStatuses.get(shuffleId).head
+            // 不是毒药就获取消息内容返回shufflesattus.
             context.reply(
               shuffleStatus.serializedMapStatus(broadcastManager, isLocal, minSizeForBroadcast))
           } catch {
@@ -435,13 +461,14 @@ private[spark] class MapOutputTrackerMaster(
   private[spark] def getNumCachedSerializedBroadcast: Int = {
     shuffleStatuses.valuesIterator.count(_.hasCachedSerializedBroadcast)
   }
-
+  /** 向MapOutputTrackerMaster中注册shuffleId和MapStatus的映射关系*/
   def registerShuffle(shuffleId: Int, numMaps: Int) {
+    // 将id和shufflestatus放入缓存,如果isDefined就抛出异常.
     if (shuffleStatuses.put(shuffleId, new ShuffleStatus(numMaps)).isDefined) {
       throw new IllegalArgumentException("Shuffle ID " + shuffleId + " registered twice")
     }
   }
-
+  /** ShuffleMapStage中所有shuffleMapTask运行成功之后,调用该方法添加mapId和status*/
   def registerMapOutput(shuffleId: Int, mapId: Int, status: MapStatus) {
     shuffleStatuses(shuffleId).addMapOutput(mapId, status)
   }
@@ -485,7 +512,9 @@ private[spark] class MapOutputTrackerMaster(
     incrementEpoch()
   }
 
-  /** Check if the given shuffle is being tracked */
+  /**
+    * 检查shuffleId是否已经存在,DAGScheduler创建ShuffleMapStage的时候会调用此方法.
+    * Check if the given shuffle is being tracked */
   def containsShuffle(shuffleId: Int): Boolean = shuffleStatuses.contains(shuffleId)
 
   def getNumAvailableOutputs(shuffleId: Int): Int = {
@@ -671,7 +700,7 @@ private[spark] class MapOutputTrackerMaster(
         Seq.empty
     }
   }
-
+  // 停止MapOutputTrackerMaster
   override def stop() {
     mapOutputRequests.offer(PoisonPill)
     threadpool.shutdown()
@@ -819,36 +848,47 @@ private[spark] object MapOutputTracker extends Logging {
   val ENDPOINT_NAME = "MapOutputTracker"
   private val DIRECT = 0
   private val BROADCAST = 1
-
+  // 将map输出位置的数组序列化并以一种高效的格式压缩,这样我们可以将结果发送给reduce任务.
+  // 我们通过GZIP压缩序列化后的字节.因为许多map输出位于同一主机名上,所以压缩通常效果很好.
   // Serialize an array of map output locations into an efficient byte format so that we can send
   // it to reduce tasks. We do this by compressing the serialized bytes using GZIP. They will
   // generally be pretty compressible because many map outputs will be on the same hostname.
   def serializeMapStatuses(statuses: Array[MapStatus], broadcastManager: BroadcastManager,
       isLocal: Boolean, minBroadcastSize: Int): (Array[Byte], Broadcast[Array[Byte]]) = {
+    // 新建字节数组输出流
     val out = new ByteArrayOutputStream
     out.write(DIRECT)
     val objOut = new ObjectOutputStream(new GZIPOutputStream(out))
     Utils.tryWithSafeFinally {
       // Since statuses can be modified in parallel, sync on it
+      // 因为statuses在并发环境下可能被修改,所以进行同步.
       statuses.synchronized {
+        // 将其写出
         objOut.writeObject(statuses)
       }
     } {
       objOut.close()
     }
+    // 获取out的字节数组.
     val arr = out.toByteArray
     if (arr.length >= minBroadcastSize) {
+      // 如果数组长度大于广播变量最小值,使用广播变量.
+      // arr(0)是刚才写入的DIRECT,这是个标志位,在反序列化时应该忽略.
       // Use broadcast instead.
       // Important arr(0) is the tag == DIRECT, ignore that while deserializing !
+      // 创建broadcast实例
       val bcast = broadcastManager.newBroadcast(arr, isLocal)
+      // 上面的toByteArray创建了一份拷贝,我们通过reset重用out.
       // toByteArray creates copy, so we can reuse out
       out.reset()
+      // 写入广播变量标志位1
       out.write(BROADCAST)
       val oos = new ObjectOutputStream(new GZIPOutputStream(out))
       oos.writeObject(bcast)
       oos.close()
       val outArr = out.toByteArray
       logInfo("Broadcast mapstatuses size = " + outArr.length + ", actual size = " + arr.length)
+      // 返回字节数组和广播变量.
       (outArr, bcast)
     } else {
       (arr, null)

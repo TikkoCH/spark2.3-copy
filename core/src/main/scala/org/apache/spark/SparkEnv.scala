@@ -327,11 +327,13 @@ object SparkEnv extends Logging {
         rpcEnv, mapOutputTracker.asInstanceOf[MapOutputTrackerMaster], conf))
 
     // Let the user specify short names for shuffle managers
-    // 为shuffleManager指定名称
+    // 为shuffleManager指定名称,生成一个名称对应类全称的map
     val shortShuffleMgrNames = Map(
       "sort" -> classOf[org.apache.spark.shuffle.sort.SortShuffleManager].getName,
       "tungsten-sort" -> classOf[org.apache.spark.shuffle.sort.SortShuffleManager].getName)
+    // spark.shuffle.manager中获取名称,默认是sort
     val shuffleMgrName = conf.get("spark.shuffle.manager", "sort")
+    // 默认使用shuffleMgrName名称的类名
     val shuffleMgrClass =
       shortShuffleMgrNames.getOrElse(shuffleMgrName.toLowerCase(Locale.ROOT), shuffleMgrName)
     val shuffleManager = instantiateClass[ShuffleManager](shuffleMgrClass)//创建shuffleManager
@@ -340,18 +342,22 @@ object SparkEnv extends Logging {
     // 创建内存管理
     val memoryManager: MemoryManager =
       if (useLegacyMemoryManager) {//配置文件有的话就可以创建
+        // 老版本spark遗留的内存管理
         new StaticMemoryManager(conf, numUsableCores)
       } else {
-        UnifiedMemoryManager(conf, numUsableCores)//没有的话创建UnifiedMemoryManager
+        //useLegacyMemoryManager等于false,默认是false.创建UnifiedMemoryManager
+        UnifiedMemoryManager(conf, numUsableCores)
       }
 
     val blockManagerPort = if (isDriver) {
-      conf.get(DRIVER_BLOCK_MANAGER_PORT) //设置Block管理的端口,Blick是Spark处理数据的最小单元哟
+      //设置Block管理的端口,Block是Spark处理数据的最小单元.如果是driver,就以DRIVER_BLOCK_MANAGER_PORT作为端口号
+      conf.get(DRIVER_BLOCK_MANAGER_PORT)
     } else {
-      conf.get(BLOCK_MANAGER_PORT)
+      conf.get(BLOCK_MANAGER_PORT) // executor以BLOCK_MANAGER_PORT作为端口号
     }
     // 创建Block传输的服务,这使用的基于Netty的传输服务
     val blockTransferService =
+    // mapoutputTracker和 NettyBlockTransferService配合形成了shuffle这个功能
       new NettyBlockTransferService(conf, securityManager, bindAddress, advertiseAddress,
         blockManagerPort, numUsableCores)
     // Block管理的主节点
