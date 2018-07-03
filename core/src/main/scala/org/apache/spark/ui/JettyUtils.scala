@@ -16,7 +16,7 @@
  */
 
 package org.apache.spark.ui
-
+// scalastyle:off
 import java.net.{URI, URL}
 import javax.servlet.DispatcherType
 import javax.servlet.http.{HttpServlet, HttpServletRequest, HttpServletResponse}
@@ -120,7 +120,9 @@ private[spark] object JettyUtils extends Logging {
     }
   }
 
-  /** Create a context handler that responds to a request with the given path prefix */
+  /**
+    * 创建上下文handler用于响应指定前缀url的请求
+    * Create a context handler that responds to a request with the given path prefix */
   def createServletHandler[T <: AnyRef](
       path: String,
       servletParams: ServletParams[T],

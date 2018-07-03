@@ -16,7 +16,7 @@
  */
 
 package org.apache.spark
-
+// scalastyle:off
 import java.io.File
 import java.net.Socket
 import java.util.Locale
@@ -390,13 +390,17 @@ object SparkEnv extends Logging {
       ms
     }
     // 创建输出提交的协调器和引用就可以创建SparkEnv的实例了
+    // 如果当前实例是driver,创建OutputCommitCoordinatorEndpoint,并且注册到Dispatcher中
+    // 注册名为OutputCommitCoordinator.如果是executor,则从Driver
+    // 实例的NettyRpcEnv的Dispatcher中查找OutputCommitCoordinatorEndpoint的引用
+    // 最后由OutputCommitCoordinator的属性coordinatorRef持有OutputCommitCoordinatorEndpoint的引用
     val outputCommitCoordinator = mockOutputCommitCoordinator.getOrElse {
       new OutputCommitCoordinator(conf, isDriver)
     }
     val outputCommitCoordinatorRef = registerOrLookupEndpoint("OutputCommitCoordinator",
       new OutputCommitCoordinatorEndpoint(rpcEnv, outputCommitCoordinator))
     outputCommitCoordinator.coordinatorRef = Some(outputCommitCoordinatorRef)
-    //之前创建的对象就是为了此刻,到此,饱满的功能齐全的SparkEnv就可以初始化了.
+    // 之前创建的对象就是为了此刻,到此,饱满的功能齐全的SparkEnv就可以初始化了.
     val envInstance = new SparkEnv(
       executorId,
       rpcEnv,

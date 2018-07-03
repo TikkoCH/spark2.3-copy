@@ -16,7 +16,7 @@
  */
 
 package org.apache.spark.scheduler
-
+// scalastyle:off
 import scala.collection.mutable
 
 import org.apache.spark._
@@ -47,7 +47,7 @@ private case class AskPermissionToCommitOutput(stage: Int, partition: Int, attem
  */
 private[spark] class OutputCommitCoordinator(conf: SparkConf, isDriver: Boolean) extends Logging {
 
-  // Initialized by SparkEnv 初始化SparkEnv
+  // Initialized by SparkEnv 由SparkEnv初始化
   var coordinatorRef: Option[RpcEndpointRef] = None
 
   private type StageId = Int
@@ -157,8 +157,9 @@ private[spark] class OutputCommitCoordinator(conf: SparkConf, isDriver: Boolean)
       stageStates.clear()
     }
   }
-
+  // 标记为private[scheduler],测试可用.
   // Marked private[scheduler] instead of private so this can be mocked in tests
+  // 用于判断给定的任务尝试是否有权限将给定stage的指定分区数据提交到hdfs
   private[scheduler] def handleAskPermissionToCommit(
       stage: StageId,
       partition: PartitionId,
@@ -214,11 +215,12 @@ private[spark] object OutputCommitCoordinator {
     logDebug("init") // force eager creation of logger
 
     override def receive: PartialFunction[Any, Unit] = {
+      // 该消息用于停止OutputCommitCoordinatorEndpoint
       case StopCoordinator =>
         logInfo("OutputCommitCoordinator stopped!")
         stop()
     }
-
+    // handleAskPermissionToCommit处理消息,确认客户端是否有权限将输出提交到HDFS
     override def receiveAndReply(context: RpcCallContext): PartialFunction[Any, Unit] = {
       case AskPermissionToCommitOutput(stage, partition, attemptNumber) =>
         context.reply(

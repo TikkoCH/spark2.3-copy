@@ -16,7 +16,7 @@
  */
 
 package org.apache.spark.metrics
-
+// scalastyle:off
 import java.util.Properties
 import java.util.concurrent.TimeUnit
 
@@ -87,7 +87,8 @@ private[spark] class MetricsSystem private (
   private var metricsServlet: Option[MetricsServlet] = None
 
   /**
-   * Get any UI handlers used by this metrics system; can only be called after start().
+   * 获取WebUI 的handler用于本注册系统,只有在start()方法调用之后才能调用该方法.
+    * Get any UI handlers used by this metrics system; can only be called after start().
    */
   def getServletHandlers: Array[ServletContextHandler] = {
     require(running, "Can only call getServletHandlers on a running MetricsSystem")
@@ -95,10 +96,13 @@ private[spark] class MetricsSystem private (
   }
 
   metricsConfig.initialize()
-
+  /** 用于启动MetricsSystem*/
   def start() {
+    // 如果running为true则已经运行了,不需要start了.
     require(!running, "Attempting to start a MetricsSystem that is already running")
+    // 将runing设为true
     running = true
+    // 将静态的度量来源CodegenMetrics和HiveCatalogMetrics注册到MetricRegistry.
     StaticSources.allSources.foreach(registerSource)
     registerSources()
     registerSinks()
@@ -119,7 +123,10 @@ private[spark] class MetricsSystem private (
   }
 
   /**
-   * Build a name that uniquely identifies each metric source.
+   * 为每个度量源构建唯一标识名称.构成如下:
+    * <app ID>.<executor ID (or "driver")>.<source name>,
+    * 如果无法获取某个Id,则默认使用<source name> <br>
+    * Build a name that uniquely identifies each metric source.
    * The name is structured as follows: <app ID>.<executor ID (or "driver")>.<source name>.
    * If either ID is not available, this defaults to just using <source name>.
    *
@@ -128,13 +135,17 @@ private[spark] class MetricsSystem private (
    *         application, executor/driver and metric source.
    */
   private[spark] def buildRegistryName(source: Source): String = {
+    // 默认读取spark.app.id作为命名空间.可通过saprk.metrics.namespace控制.
     val metricsNamespace = conf.get(METRICS_NAMESPACE).orElse(conf.getOption("spark.app.id"))
-
+    // 获取spark.executor.id
     val executorId = conf.getOption("spark.executor.id")
+    // 获取默认名称.
     val defaultName = MetricRegistry.name(source.sourceName)
-
+    // 如果是driver或executor
     if (instance == "driver" || instance == "executor") {
+      // 如果metricsNamespace和executorId已定义.
       if (metricsNamespace.isDefined && executorId.isDefined) {
+        // 生成${metricesNamespace}.${executorId}.${defaultName}格式注册名
         MetricRegistry.name(metricsNamespace.get, executorId.get, source.sourceName)
       } else {
         // Only Driver and Executor set spark.app.id and spark.executor.id.
@@ -147,6 +158,7 @@ private[spark] class MetricsSystem private (
           logWarning(s"Using default name $defaultName for source because spark.executor.id is " +
             s"not set.")
         }
+        // 否则默认名称.
         defaultName
       }
     } else { defaultName }
@@ -172,27 +184,35 @@ private[spark] class MetricsSystem private (
       def matches(name: String, metric: Metric): Boolean = name.startsWith(regName)
     })
   }
-
+  /** 注册度量数据源*/
   private def registerSources() {
+    // 获取当前实例的度量属性.
     val instConfig = metricsConfig.getInstance(instance)
+    // 通过匹配正则表达式"^source\\.(.+)\\.(.+)",获取所有度量源细粒度属性和实例.
     val sourceConfigs = metricsConfig.subProperties(instConfig, MetricsSystem.SOURCE_REGEX)
 
     // Register all the sources related to instance
+    // 注册所有相关实例
     sourceConfigs.foreach { kv =>
+      // 获取class{ath
       val classPath = kv._2.getProperty("class")
       try {
+        // 反射获取实例对象
         val source = Utils.classForName(classPath).newInstance()
+        // 注册
         registerSource(source.asInstanceOf[Source])
       } catch {
         case e: Exception => logError("Source class " + classPath + " cannot be instantiated", e)
       }
     }
   }
-
+  // 注册度量输出目的地
   private def registerSinks() {
+    // 获取当前实例的度量属性
     val instConfig = metricsConfig.getInstance(instance)
+    // 通过正则匹配获取所有细粒度实例及属性
     val sinkConfigs = metricsConfig.subProperties(instConfig, MetricsSystem.SINK_REGEX)
-
+    // 通过反射生成实例注册sink目的地.
     sinkConfigs.foreach { kv =>
       val classPath = kv._2.getProperty("class")
       if (null != classPath) {
@@ -201,8 +221,10 @@ private[spark] class MetricsSystem private (
             .getConstructor(classOf[Properties], classOf[MetricRegistry], classOf[SecurityManager])
             .newInstance(kv._2, registry, securityMgr)
           if (kv._1 == "servlet") {
+            // 如果当前实例是servlet,则由metricsServlet持有此servlet引用
             metricsServlet = Some(sink.asInstanceOf[MetricsServlet])
           } else {
+            // 否则将度量输出实例注册到数组缓冲sinks中.
             sinks += sink.asInstanceOf[Sink]
           }
         } catch {

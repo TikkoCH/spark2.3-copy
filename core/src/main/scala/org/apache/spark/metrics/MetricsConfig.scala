@@ -16,7 +16,7 @@
  */
 
 package org.apache.spark.metrics
-
+// scalastyle:off
 import java.io.{FileInputStream, InputStream}
 import java.util.Properties
 
@@ -37,7 +37,7 @@ private[spark] class MetricsConfig(conf: SparkConf) extends Logging {
   private[metrics] val properties = new Properties()
   // 每个实例的子属性,缓存每个实例与其属性的映射关系
   private[metrics] var perInstanceSubProperties: mutable.HashMap[String, Properties] = null
-
+  // 设置默认属性
   private def setDefaultProperties(prop: Properties) {
     prop.setProperty("*.sink.servlet.class", "org.apache.spark.metrics.sink.MetricsServlet")
     prop.setProperty("*.sink.servlet.path", "/metrics/json")
@@ -46,23 +46,35 @@ private[spark] class MetricsConfig(conf: SparkConf) extends Logging {
   }
 
   /**
-   * Load properties from various places, based on precedence
+   * 从不同的地方加载属性,如果相同的属性在之后的方法中设置了,会覆盖之前的值.
+    * Load properties from various places, based on precedence
    * If the same property is set again latter on in the method, it overwrites the previous value
    */
   def initialize() {
     // Add default properties in case there's no properties file
+    // 设置默认属性
     setDefaultProperties(properties)
-
+    // 从文件中加载度量属性.可以通过spark.metrics.conf指定属性文件.
     loadPropertiesFromFile(conf.getOption("spark.metrics.conf"))
 
     // Also look for the properties in provided Spark configuration
+    // 从sparkConf中查找spark.metrics.conf.作为前缀的属性
     val prefix = "spark.metrics.conf."
     conf.getAll.foreach {
       case (k, v) if k.startsWith(prefix) =>
+        // 截取spark.metrics.conf.后的部分作为key
         properties.setProperty(k.substring(prefix.length()), v)
       case _ =>
     }
 
+    // //现在，让我们填充每个实例的子属性列表，实例是在属性名称中第一个点之前出现的前缀。
+    // 添加到每个实例的子属性，默认属性（前缀为“*”的属性），
+    // 如果它们没有已经定义的完全相同的子属性。
+    //  例如，如果属性有（“* .class” - >“default_class”，“*.path” - >“default_path”，
+    // “driver.path” - >“driver_path”），对于驱动程序特定的子属性，
+    // 我们会 像输出一样
+    // （“driver” - > Map（“path” - >“driver_path”，“class” - >“default_class”）
+     // 注意如何基于默认属性添加类，但路径保持不变，因为“driver.path”已经存在并且优先于“* .path"
     // Now, let's populate a list of sub-properties per instance, instance being the prefix that
     // appears before the first dot in the property name.
     // Add to the sub-properties per instance, the default properties (those with prefix "*"), if
@@ -85,7 +97,10 @@ private[spark] class MetricsConfig(conf: SparkConf) extends Logging {
   }
 
   /**
-   * Take a simple set of properties and a regex that the instance names (part before the first dot)
+   * 对于properties中的每个属性kv.通过正则表达式匹配找出kve中key的前缀和后缀,
+    * 前缀作为实例,后缀作为新的属性kv2的key,kv的value作为新的属性kv2的value.
+    * 最后降属性kv2添加到实例对应的属性集合中作为实例的属性.<br>
+    * Take a simple set of properties and a regex that the instance names (part before the first dot)
    * have to conform to. And, return a map of the first order prefix (before the first dot) to the
    * sub-properties under that prefix.
    *
@@ -114,16 +129,19 @@ private[spark] class MetricsConfig(conf: SparkConf) extends Logging {
     }
     subProperties
   }
-
+  /** 获取实例的属性*/
   def getInstance(inst: String): Properties = {
+    // 从perInstanceSubProperties获取属性
     perInstanceSubProperties.get(inst) match {
       case Some(s) => s
+        //如果未获得,返回默认值
       case None => perInstanceSubProperties.getOrElse(DEFAULT_PREFIX, new Properties)
     }
   }
 
   /**
-   * Loads configuration from a config file. If no config file is provided, try to get file
+   * 从指定配置文件中加载配置.如果没有文件路径会尝试从classpath中读取metrics.properties.
+    * Loads configuration from a config file. If no config file is provided, try to get file
    * in class path.
    */
   private[this] def loadPropertiesFromFile(path: Option[String]): Unit = {

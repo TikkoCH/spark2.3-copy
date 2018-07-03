@@ -16,7 +16,7 @@
  */
 
 package org.apache.spark.metrics.sink
-
+// scalastyle:off
 import java.util.Properties
 import java.util.concurrent.TimeUnit
 import javax.servlet.http.HttpServletRequest
@@ -47,7 +47,7 @@ private[spark] class MetricsServlet(
 
   val mapper = new ObjectMapper().registerModule(
     new MetricsModule(TimeUnit.SECONDS, TimeUnit.MILLISECONDS, servletShowSample))
-
+  /** 创建Array[ServletContextHandler]*/
   def getHandlers(conf: SparkConf): Array[ServletContextHandler] = {
     Array[ServletContextHandler](
       createServletHandler(servletPath,
