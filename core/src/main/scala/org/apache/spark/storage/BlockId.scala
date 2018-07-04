@@ -23,7 +23,10 @@ import org.apache.spark.SparkException
 import org.apache.spark.annotation.DeveloperApi
 
 /**
- * :: DeveloperApi ::
+ * 数据块Block的标识,通常和单个文件相关联.块可以通过其文件名唯一标识，
+  * 但每种类型的块都有一组不同的键，这些键产生其唯一名称.如果你的BlockId需要可序列化,
+  * 确保将其加入BlockId.apply()方法.<br>
+  * :: DeveloperApi ::
  * Identifies a particular Block of data, usually associated with a single file.
  * A Block can be uniquely identified by its filename, but each type of Block has a different
  * set of keys which produce its unique name.
@@ -32,13 +35,18 @@ import org.apache.spark.annotation.DeveloperApi
  */
 @DeveloperApi
 sealed abstract class BlockId {
-  /** A globally unique identifier for this Block. Can be used for ser/de. */
+  /** 全局唯一标识.可用于序列化和反序列化.
+    * A globally unique identifier for this Block. Can be used for ser/de. */
   def name: String
 
   // convenience methods
+  // 将当前BlockId转换成RDDBlockId.如果当前BlockId是RDDBlockId则转换,否则返回NONE
   def asRDDId: Option[RDDBlockId] = if (isRDD) Some(asInstanceOf[RDDBlockId]) else None
+  // 判断当前BlockId时候是否是RDDBlockId
   def isRDD: Boolean = isInstanceOf[RDDBlockId]
+  // 当前BlockId是否是ShuffleBlockId
   def isShuffle: Boolean = isInstanceOf[ShuffleBlockId]
+  // 当前BlockId是否是BroadcastBlockId
   def isBroadcast: Boolean = isInstanceOf[BroadcastBlockId]
 
   override def toString: String = name

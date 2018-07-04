@@ -72,14 +72,18 @@ private[spark] class OutputCommitCoordinator(conf: SparkConf, isDriver: Boolean)
   private val stageStates = mutable.Map[StageId, StageState]()
 
   /**
-   * Returns whether the OutputCommitCoordinator's internal data structures are all empty.
+   * 返回OutputCoordinator的内部数据结构是否为空.
+    * Returns whether the OutputCommitCoordinator's internal data structures are all empty.
    */
   def isEmpty: Boolean = {
     stageStates.isEmpty
   }
 
   /**
-   * Called by tasks to ask whether they can commit their output to HDFS.
+   * task调用该方法询问他们是否有权提交输出到HDFS.如果task的尝试已经被认定可提交,
+    * 那么后续其他尝试提交相同任务的请求会被拒绝.如果验证task尝试失败(如,由于executor失联)
+    * 那么后续task尝试提交任务会被验证通过.
+    * Called by tasks to ask whether they can commit their output to HDFS.
    *
    * If a task attempt has been authorized to commit, then all other attempts to commit the same
    * task will be denied.  If the authorized task attempt fails (e.g. due to its executor being
@@ -99,7 +103,7 @@ private[spark] class OutputCommitCoordinator(conf: SparkConf, isDriver: Boolean)
     coordinatorRef match {
       case Some(endpointRef) =>
         ThreadUtils.awaitResult(endpointRef.ask[Boolean](msg),
-          RpcUtils.askRpcTimeout(conf).duration)
+          RpcUtils.askRpcTimeout(conf).duration) // 询问是否有权限提交到HDFS
       case None =>
         logError(
           "canCommit called after coordinator was stopped (is SparkEnv shutdown in progress)?")
@@ -108,7 +112,10 @@ private[spark] class OutputCommitCoordinator(conf: SparkConf, isDriver: Boolean)
   }
 
   /**
-   * Called by the DAGScheduler when a stage starts.
+   * DAGScheduler会当Stage开始时调用该方法.该方法用于启动给定Stage的输出提交到HDFS的协调机制.
+    * 本质上为创建给定StageStage样例类,该样例类包含三个属性:
+    * numPartitions;authorizedCommitters;failures,该样例类就在上面可以看一下.
+    * Called by the DAGScheduler when a stage starts.
    *
    * @param stage the stage id.
    * @param maxPartitionId the maximum partition id that could appear in this stage's tasks (i.e.
@@ -118,11 +125,11 @@ private[spark] class OutputCommitCoordinator(conf: SparkConf, isDriver: Boolean)
     stageStates(stage) = new StageState(maxPartitionId + 1)
   }
 
-  // Called by DAGScheduler
+  // Called by DAGScheduler 根据StageId删除stage
   private[scheduler] def stageEnd(stage: StageId): Unit = synchronized {
     stageStates.remove(stage)
   }
-
+  // 当指定Stage的制定分区的任务执行完成会调用taskCompeted方法.
   // Called by DAGScheduler
   private[scheduler] def taskCompleted(
       stage: StageId,
@@ -134,26 +141,31 @@ private[spark] class OutputCommitCoordinator(conf: SparkConf, isDriver: Boolean)
       return
     })
     reason match {
+        // 执行成功,啥都没发生..
       case Success =>
       // The task output has been committed successfully
+        //执行拒绝,log
       case denied: TaskCommitDenied =>
         logInfo(s"Task was denied committing, stage: $stage, partition: $partition, " +
           s"attempt: $attemptNumber")
       case otherReason =>
+        // 将尝试标记为未来的提交协议黑名单
         // Mark the attempt as failed to blacklist from future commit protocol
         stageState.failures.getOrElseUpdate(partition, mutable.Set()) += attemptNumber
         if (stageState.authorizedCommitters(partition) == attemptNumber) {
           logDebug(s"Authorized committer (attemptNumber=$attemptNumber, stage=$stage, " +
             s"partition=$partition) failed; clearing lock")
+          // 将其值修改为NO_AUTHORIZED_COMMITTER,这样后续的尝试有权限提交.
           stageState.authorizedCommitters(partition) = NO_AUTHORIZED_COMMITTER
         }
     }
   }
-
+  // 发送StopCoordinator用于停止OutputCommitCoordinatorEndpoint
   def stop(): Unit = synchronized {
     if (isDriver) {
       coordinatorRef.foreach(_ send StopCoordinator)
       coordinatorRef = None
+      // 清空stageStates
       stageStates.clear()
     }
   }
@@ -164,6 +176,7 @@ private[spark] class OutputCommitCoordinator(conf: SparkConf, isDriver: Boolean)
       stage: StageId,
       partition: PartitionId,
       attemptNumber: TaskAttemptNumber): Boolean = synchronized {
+    // 从缓存中找到指定stage的制定分区的TaskAttemptNumber
     stageStates.get(stage) match {
       case Some(state) if attemptFailed(state, partition, attemptNumber) =>
         logInfo(s"Denying attemptNumber=$attemptNumber to commit for stage=$stage," +
@@ -171,12 +184,16 @@ private[spark] class OutputCommitCoordinator(conf: SparkConf, isDriver: Boolean)
         false
       case Some(state) =>
         state.authorizedCommitters(partition) match {
+            // 如果是NO_AUTHORIZED_COMMITTER,说明是首次提交指定Stage的指定分区的输出.
+            // 按照第一提交这胜利策略,给定TaskAttempNumber有权将给定Stage的指定分区提交到HDFS.
           case NO_AUTHORIZED_COMMITTER =>
             logDebug(s"Authorizing attemptNumber=$attemptNumber to commit for stage=$stage, " +
               s"partition=$partition")
+            // 需要告诉后面任务已经有人提交,将attemptNumber缓存
             state.authorizedCommitters(partition) = attemptNumber
             true
           case existingCommitter =>
+            // Coordinator在接受AskPermissionToCommit请求时应该是幂等的.
             // Coordinator should be idempotent when receiving AskPermissionToCommit.
             if (existingCommitter == attemptNumber) {
               logWarning(s"Authorizing duplicate request to commit for " +
@@ -185,6 +202,7 @@ private[spark] class OutputCommitCoordinator(conf: SparkConf, isDriver: Boolean)
                 s" This can indicate dropped network traffic.")
               true
             } else {
+              // 对于不等于attemptNumber的已存在的指定stage的指定分区的输出就无权提交了.
               logDebug(s"Denying attemptNumber=$attemptNumber to commit for stage=$stage, " +
                 s"partition=$partition; existingCommitter = $existingCommitter")
               false

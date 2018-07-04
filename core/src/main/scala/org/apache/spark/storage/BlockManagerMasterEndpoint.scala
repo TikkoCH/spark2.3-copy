@@ -474,6 +474,7 @@ class BlockManagerMasterEndpoint(
   }
 }
 
+// 封装Block的状态信息.Block的存储级别,内存占用大小,磁盘占用大小,是否存储到存储体系中.
 @DeveloperApi
 case class BlockStatus(storageLevel: StorageLevel, memSize: Long, diskSize: Long) {
   def isCached: Boolean = memSize + diskSize > 0

@@ -37,11 +37,13 @@ import org.apache.spark.util.Utils
  */
 @DeveloperApi
 class StorageLevel private(
-    private var _useDisk: Boolean,
-    private var _useMemory: Boolean,
-    private var _useOffHeap: Boolean,
+    private var _useDisk: Boolean, // 能否写入磁盘
+    private var _useMemory: Boolean, // 能否写入内存
+    private var _useOffHeap: Boolean, // 能否写入堆外内存
+    //是否需要对block反序列化,当Block本身经过序列化之后,Block的StorageLevel中的_deserialized会被设为true
+    // 就可以反序列化了.
     private var _deserialized: Boolean,
-    private var _replication: Int = 1)
+    private var _replication: Int = 1) // 副本数,默认为1
   extends Externalizable {
 
   // TODO: Also add fields for caching priority, dataset ID, and flushing.
@@ -50,11 +52,16 @@ class StorageLevel private(
   }
 
   def this() = this(false, true, false, false)  // For deserialization
-
+  // 下面都是类似get方法的方法
+  // 返回能否写入磁盘
   def useDisk: Boolean = _useDisk
+  // 能否使用内存
   def useMemory: Boolean = _useMemory
+  // 能否使用对外内存
   def useOffHeap: Boolean = _useOffHeap
+  // 能否反序列化
   def deserialized: Boolean = _deserialized
+  // 副本书
   def replication: Int = _replication
 
   assert(replication < 40, "Replication restricted to be less than 40 for calculating hash codes")
@@ -62,12 +69,12 @@ class StorageLevel private(
   if (useOffHeap) {
     require(!deserialized, "Off-heap storage level does not support deserialized storage")
   }
-
+  /**内存模式,如果useOffHeap为true,则返回OFF_HEAP,否则返回ON_HEAP*/
   private[spark] def memoryMode: MemoryMode = {
     if (useOffHeap) MemoryMode.OFF_HEAP
     else MemoryMode.ON_HEAP
   }
-
+  // 对当前StorageLevel克隆并返回.实际new了个对象
   override def clone(): StorageLevel = {
     new StorageLevel(useDisk, useMemory, useOffHeap, deserialized, replication)
   }
@@ -82,9 +89,9 @@ class StorageLevel private(
     case _ =>
       false
   }
-
+  // 是否有效,副本>0并且内存硬盘二选一
   def isValid: Boolean = (useMemory || useDisk) && (replication > 0)
-
+  // 将当前StorageLevel转换成整形
   def toInt: Int = {
     var ret = 0
     if (_useDisk) {
@@ -101,12 +108,12 @@ class StorageLevel private(
     }
     ret
   }
-
+  // 将对象写入外部流ObjectOutput
   override def writeExternal(out: ObjectOutput): Unit = Utils.tryOrIOException {
     out.writeByte(toInt)
     out.writeByte(_replication)
   }
-
+  // 从外部流读取
   override def readExternal(in: ObjectInput): Unit = Utils.tryOrIOException {
     val flags = in.readByte()
     _useDisk = (flags & 8) != 0
