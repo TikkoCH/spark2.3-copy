@@ -21,7 +21,15 @@ import org.apache.spark.SparkConf
 import org.apache.spark.storage.BlockId
 
 /**
- * A [[MemoryManager]] that enforces a soft boundary between execution and storage such that
+ * MemoryManager的子类,在执行内存和存储内存之间形成了软边界,这样彼此之间可以互相借用内存.
+  * 执行和存储之间共享的区域是（总堆空间 - 300MB）的一小部分，可通过`spark.memory.fraction`配置（默认值为0.6).
+  * 此空间内边界的位置由`spark.memory.storageFraction`（默认值0.5）进一步确定.
+  * 这意味着默认情况下，存储区域的大小为0.6 * 0.5 = 0.3倍的堆空间.
+  * 存储内存可以借用尽可能多的执行内存,知道执行内存恢复其存储空间.在这种情况下,缓存的block会被从内存中移除,
+  * 直到借用内存释放到满足执行内存需求.同样,执行内存也可以借用存储内存,但是由于执行内存的复杂性,
+  * 执行内存NEVER被存储内存移除.这就意味着如果执行内存占用量比较大,尝试缓存Block可能会失败.这种情况,
+  * 新的block被缓存可能会被立即移除,这取决于存储内存的存储级别.
+  * A [[MemoryManager]] that enforces a soft boundary between execution and storage such that
  * either side can borrow memory from the other.
  *
  * The region shared between execution and storage is a fraction of (the total heap space - 300MB)
@@ -46,33 +54,34 @@ import org.apache.spark.storage.BlockId
  */
 private[spark] class UnifiedMemoryManager private[memory] (
     conf: SparkConf,
-    val maxHeapMemory: Long,
-    onHeapStorageRegionSize: Long,
-    numCores: Int)
+    val maxHeapMemory: Long, // 最大堆内存
+    onHeapStorageRegionSize: Long, // 用于存储堆内存大小.
+    numCores: Int) // 核心数量
   extends MemoryManager(
     conf,
     numCores,
     onHeapStorageRegionSize,
     maxHeapMemory - onHeapStorageRegionSize) {
-
+  // 验证一下内存大小是不是正确
   private def assertInvariants(): Unit = {
     assert(onHeapExecutionMemoryPool.poolSize + onHeapStorageMemoryPool.poolSize == maxHeapMemory)
     assert(
       offHeapExecutionMemoryPool.poolSize + offHeapStorageMemoryPool.poolSize == maxOffHeapMemory)
   }
-
+  // 初始化时候都会验证
   assertInvariants()
-
+  // 最大存储堆内存大小
   override def maxOnHeapStorageMemory: Long = synchronized {
     maxHeapMemory - onHeapExecutionMemoryPool.memoryUsed
   }
-
+  // 最大堆外内存大小
   override def maxOffHeapStorageMemory: Long = synchronized {
     maxOffHeapMemory - offHeapExecutionMemoryPool.memoryUsed
   }
 
   /**
-   * Try to acquire up to `numBytes` of execution memory for the current task and return the
+   *
+    * Try to acquire up to `numBytes` of execution memory for the current task and return the
    * number of bytes obtained, or 0 if none can be allocated.
    *
    * This call may block until there is enough free memory in some situations, to make sure each
@@ -145,13 +154,14 @@ private[spark] class UnifiedMemoryManager private[memory] (
     executionPool.acquireMemory(
       numBytes, taskAttemptId, maybeGrowExecutionPool, () => computeMaxExecutionPoolSize)
   }
-
+  // 为存储BlockId对应的Block获取numBytes字节大小内存,memoryMode决定堆内或堆外
   override def acquireStorageMemory(
       blockId: BlockId,
       numBytes: Long,
       memoryMode: MemoryMode): Boolean = synchronized {
     assertInvariants()
     assert(numBytes >= 0)
+    // 根据memoryMode获取执行内存池,存储内存池,和最大存储内存.
     val (executionPool, storagePool, maxMemory) = memoryMode match {
       case MemoryMode.ON_HEAP => (
         onHeapExecutionMemoryPool,
@@ -162,6 +172,7 @@ private[spark] class UnifiedMemoryManager private[memory] (
         offHeapStorageMemoryPool,
         maxOffHeapStorageMemory)
     }
+    // numBytes大于最大内存的话就返回false.
     if (numBytes > maxMemory) {
       // Fail fast if the block simply won't fit
       logInfo(s"Will not store $blockId as the required space ($numBytes bytes) exceeds our " +
@@ -169,6 +180,7 @@ private[spark] class UnifiedMemoryManager private[memory] (
       return false
     }
     if (numBytes > storagePool.memoryFree) {
+      // 存储内存池空间不足,到计算内存池中借用
       // There is not enough free memory in the storage pool, so try to borrow free memory from
       // the execution pool.
       val memoryBorrowedFromExecution = Math.min(executionPool.memoryFree,
@@ -176,6 +188,7 @@ private[spark] class UnifiedMemoryManager private[memory] (
       executionPool.decrementPoolSize(memoryBorrowedFromExecution)
       storagePool.incrementPoolSize(memoryBorrowedFromExecution)
     }
+    // 从存储内存池获取Block所需空间
     storagePool.acquireMemory(blockId, numBytes)
   }
 

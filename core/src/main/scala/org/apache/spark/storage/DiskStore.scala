@@ -36,36 +36,43 @@ import org.apache.spark.util.Utils
 import org.apache.spark.util.io.ChunkedByteBuffer
 
 /**
- * Stores BlockManager blocks on disk.
+ * 将Block存储到磁盘上.
+  * Stores BlockManager blocks on disk.
  */
 private[spark] class DiskStore(
     conf: SparkConf,
     diskManager: DiskBlockManager,
     securityManager: SecurityManager) extends Logging {
-
+  /**读取磁盘中的Block时,是直接读取还是shiyongFIleChannel的内存镜像映射的方法读取的阈值*/
   private val minMemoryMapBytes = conf.getSizeAsBytes("spark.storage.memoryMapThreshold", "2m")
   private val maxMemoryMapBytes = conf.getSizeAsBytes("spark.storage.memoryMapLimitForTests",
     Int.MaxValue.toString)
+  /**BlockId对应Block数据size的缓存*/
   private val blockSizes = new ConcurrentHashMap[BlockId, Long]()
-
+  /** 此方法用于获取给定的BlockId对应的Block大小*/
   def getSize(blockId: BlockId): Long = blockSizes.get(blockId)
 
   /**
-   * Invokes the provided callback function to write the specific block.
+   * 将BlockId对应的Block写入磁盘.调用参数中的回调方法将指定的block写入磁盘.
+    * Invokes the provided callback function to write the specific block.
    *
    * @throws IllegalStateException if the block already exists in the disk store.
    */
   def put(blockId: BlockId)(writeFunc: WritableByteChannel => Unit): Unit = {
-    if (contains(blockId)) {
+    if (contains(blockId)) { // 如果Block已经存在,抛异常
       throw new IllegalStateException(s"Block $blockId is already present in the disk store")
     }
     logDebug(s"Attempting to put block $blockId")
     val startTime = System.currentTimeMillis
+    // 获取Block对应文件,这和上面的是否存在不冲突,因为这会为不存在的Block创建文件
     val file = diskManager.getFile(blockId)
+    // 打开输出流
     val out = new CountingWritableChannel(openForWrite(file))
     var threwException: Boolean = true
     try {
+      // 调用回调函数writeFunc,将Block写入
       writeFunc(out)
+      // 同步缓存
       blockSizes.put(blockId, out.getCount)
       threwException = false
     } finally {
@@ -79,6 +86,7 @@ private[spark] class DiskStore(
           }
       } finally {
          if (threwException) {
+           // 如果异常 删除
           remove(blockId)
         }
       }
@@ -89,19 +97,21 @@ private[spark] class DiskStore(
       Utils.bytesToString(file.length()),
       finishTime - startTime))
   }
-
+  /** 将BlockId对应的Block写入磁盘,Block内容被封装成了参数ChunkedByteBuffer*/
   def putBytes(blockId: BlockId, bytes: ChunkedByteBuffer): Unit = {
     put(blockId) { channel =>
       bytes.writeFully(channel)
     }
   }
-
+  /** 读取BlockId对应的Block,返回BlockData*/
   def getBytes(blockId: BlockId): BlockData = {
     val file = diskManager.getFile(blockId.name)
     val blockSize = getSize(blockId)
 
     securityManager.getIOEncryptionKey() match {
       case Some(key) =>
+        // 加密块无法通过内存映射读取,返回一个执行解密的特殊对象，
+        // 并提供InputStream / FileRegion实现来读取数据.
         // Encrypted blocks cannot be memory mapped; return a special object that does decryption
         // and provides InputStream / FileRegion implementations for reading the data.
         new EncryptedBlockData(file, blockSize, conf, key)
@@ -110,7 +120,7 @@ private[spark] class DiskStore(
         new DiskBlockData(minMemoryMapBytes, maxMemoryMapBytes, file, blockSize)
     }
   }
-
+  /** 删除指定BlockId对应的Block文件*/
   def remove(blockId: BlockId): Boolean = {
     blockSizes.remove(blockId)
     val file = diskManager.getFile(blockId.name)
@@ -124,7 +134,7 @@ private[spark] class DiskStore(
       false
     }
   }
-
+  /** 判断本地磁盘存储路径是否包含BlockId对应的Block文件*/
   def contains(blockId: BlockId): Boolean = {
     val file = diskManager.getFile(blockId.name)
     file.exists()

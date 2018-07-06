@@ -92,7 +92,10 @@ private[spark] object ShutdownHookManager extends Logging {
       shutdownDeletePaths.contains(absolutePath)
     }
   }
-
+    /** 如果file是某个注册路径的子节点,并且不等于注册路径,返回true,否则返回false.
+      * 这确保两个shutdown钩子不试图删除对方的路径,如果不做这个保险,
+      * 可能会导致IOException并且不能完成清除工作
+      * */
   // Note: if file is child of some registered path, while not equal to it, then return true;
   // else false. This is to ensure that two shutdown hooks do not try to delete each others
   // paths - resulting in IOException and incomplete cleanup.

@@ -455,27 +455,35 @@ private[storage] class BlockInfoManager extends Logging {
   }
 
   /**
-   * Removes the given block and releases the write lock on it.
+   * 删除指定BlockId对应的BlockInfo.
+    * Removes the given block and releases the write lock on it.
    *
    * This can only be called while holding a write lock on the given block.
    */
   def removeBlock(blockId: BlockId): Unit = synchronized {
     logTrace(s"Task $currentTaskAttemptId trying to remove block $blockId")
+    // 获取blockInfo
     infos.get(blockId) match {
       case Some(blockInfo) =>
+        // 如果正在写入的任务尝试线程不是当前线程,抛异常
         if (blockInfo.writerTask != currentTaskAttemptId) {
           throw new IllegalStateException(
             s"Task $currentTaskAttemptId called remove() on block $blockId without a write lock")
         } else {
+          // 移除
           infos.remove(blockId)
+          // 读线程数清零
           blockInfo.readerCount = 0
+          // writerTask设置为NO_WRITER
           blockInfo.writerTask = BlockInfo.NO_WRITER
+          // 清除任务尝试线程与BlockId的关系
           writeLocksByTask.removeBinding(currentTaskAttemptId, blockId)
         }
       case None =>
         throw new IllegalArgumentException(
           s"Task $currentTaskAttemptId called remove() on non-existent block $blockId")
     }
+    // 唤醒其他所有等待线程
     notifyAll()
   }
 

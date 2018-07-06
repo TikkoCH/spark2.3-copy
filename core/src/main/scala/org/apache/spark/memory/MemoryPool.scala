@@ -20,34 +20,40 @@ package org.apache.spark.memory
 import javax.annotation.concurrent.GuardedBy
 
 /**
- * Manages bookkeeping for an adjustable-sized region of memory. This class is internal to
+ *  管理可调大小的内存区域的对象.该类是MemoryManager的内部类.
+  * Manages bookkeeping for an adjustable-sized region of memory. This class is internal to
  * the [[MemoryManager]]. See subclasses for more details.
  *
- * @param lock a [[MemoryManager]] instance, used for synchronization. We purposely erase the type
+ * @param lock 一个MemoryManager实例，用于同步.我们故意将类型擦除为object以避免编程错误，
+  *             因为此对象应仅用于同步目的。
+  *             a [[MemoryManager]] instance, used for synchronization. We purposely erase the type
  *             to `Object` to avoid programming errors, since this object should only be used for
  *             synchronization purposes.
  */
 private[memory] abstract class MemoryPool(lock: Object) {
-
+  /** 内存池大小,单位字节Byte*/
   @GuardedBy("lock")
   private[this] var _poolSize: Long = 0
 
   /**
-   * Returns the current size of the pool, in bytes.
+   * get方法,返回_poolSize
+    * Returns the current size of the pool, in bytes.
    */
   final def poolSize: Long = lock.synchronized {
     _poolSize
   }
 
   /**
-   * Returns the amount of free memory in the pool, in bytes.
+   * 获取内存池的空闲空间.
+    * Returns the amount of free memory in the pool, in bytes.
    */
   final def memoryFree: Long = lock.synchronized {
     _poolSize - memoryUsed
   }
 
   /**
-   * Expands the pool by `delta` bytes.
+   * 扩展内存池容量,参数delta为扩展大小.
+    * Expands the pool by `delta` bytes.
    */
   final def incrementPoolSize(delta: Long): Unit = lock.synchronized {
     require(delta >= 0)
@@ -55,7 +61,8 @@ private[memory] abstract class MemoryPool(lock: Object) {
   }
 
   /**
-   * Shrinks the pool by `delta` bytes.
+   * 缩小内存池容量,参数delta为缩小字节数
+    * Shrinks the pool by `delta` bytes.
    */
   final def decrementPoolSize(delta: Long): Unit = lock.synchronized {
     require(delta >= 0)
@@ -65,7 +72,8 @@ private[memory] abstract class MemoryPool(lock: Object) {
   }
 
   /**
-   * Returns the amount of used memory in this pool (in bytes).
+   * 获取使用的内存大小,单位byte
+    * Returns the amount of used memory in this pool (in bytes).
    */
   def memoryUsed: Long
 }

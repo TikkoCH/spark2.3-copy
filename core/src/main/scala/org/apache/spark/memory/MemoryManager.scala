@@ -29,7 +29,9 @@ import org.apache.spark.unsafe.array.ByteArrayMethods
 import org.apache.spark.unsafe.memory.MemoryAllocator
 
 /**
- * An abstract memory manager that enforces how memory is shared between execution and storage.
+ * 一种抽象内存管理器，用于强制执行和存储之间共享内存的方式.在这个上下文环境中,执行内存为用于计算shuffle,join,
+  * sort和aggregations;存储内存为用于缓存那些在集群内部传输的数据.每个JVM都有一个MemoryManager.
+  * An abstract memory manager that enforces how memory is shared between execution and storage.
  *
  * In this context, execution memory refers to that used for computation in shuffles, joins,
  * sorts and aggregations, while storage memory refers to that used for caching and propagating
@@ -38,11 +40,12 @@ import org.apache.spark.unsafe.memory.MemoryAllocator
 private[spark] abstract class MemoryManager(
     conf: SparkConf,
     numCores: Int,
-    onHeapStorageMemory: Long,
+    onHeapStorageMemory: Long, // 用于存储的堆内存大小
+    // 用于执行的堆内存大小
     onHeapExecutionMemory: Long) extends Logging {
 
   // -- Methods related to memory allocation policies and bookkeeping ------------------------------
-
+  // 四个成员分别代表,执行堆内堆外内存池,存储堆外堆内内存池.
   @GuardedBy("this")
   protected val onHeapStorageMemoryPool = new StorageMemoryPool(this, MemoryMode.ON_HEAP)
   @GuardedBy("this")
@@ -51,11 +54,12 @@ private[spark] abstract class MemoryManager(
   protected val onHeapExecutionMemoryPool = new ExecutionMemoryPool(this, MemoryMode.ON_HEAP)
   @GuardedBy("this")
   protected val offHeapExecutionMemoryPool = new ExecutionMemoryPool(this, MemoryMode.OFF_HEAP)
-
+  // 这里对内存池初始化
   onHeapStorageMemoryPool.incrementPoolSize(onHeapStorageMemory)
   onHeapExecutionMemoryPool.incrementPoolSize(onHeapExecutionMemory)
-
+  // 堆外内存最大值,可通过spark.memory.offHeep.size设置,默认为0
   protected[this] val maxOffHeapMemory = conf.get(MEMORY_OFFHEAP_SIZE)
+  // 用于存储的堆外内存大小.可通过spark.memory.storageFraction属性设置,默认为0.5.
   protected[this] val offHeapStorageMemory =
     (maxOffHeapMemory * conf.getDouble("spark.memory.storageFraction", 0.5)).toLong
 
@@ -63,20 +67,24 @@ private[spark] abstract class MemoryManager(
   offHeapStorageMemoryPool.incrementPoolSize(offHeapStorageMemory)
 
   /**
-   * Total available on heap memory for storage, in bytes. This amount can vary over time,
+   * 用于存储的最大堆内存容量,单位字节.这个总数可以随着时间变化,取决于子类实现.
+    * 在本模型中,这个值等价于execution内存未占用的值.
+    * Total available on heap memory for storage, in bytes. This amount can vary over time,
    * depending on the MemoryManager implementation.
    * In this model, this is equivalent to the amount of memory not occupied by execution.
    */
   def maxOnHeapStorageMemory: Long
 
   /**
-   * Total available off heap memory for storage, in bytes. This amount can vary over time,
+   * 用于存储的最大堆外内存,单位字节.可随时间变换,取决于具体实现.
+    * Total available off heap memory for storage, in bytes. This amount can vary over time,
    * depending on the MemoryManager implementation.
    */
   def maxOffHeapStorageMemory: Long
 
   /**
-   * Set the [[MemoryStore]] used by this manager to evict cached blocks.
+   * 给***MemoryPool设置MemoryStore,用于缓存或移除Block.必须初始化之后设置
+    * Set the [[MemoryStore]] used by this manager to evict cached blocks.
    * This must be set after construction due to initialization ordering constraints.
    */
   final def setMemoryStore(store: MemoryStore): Unit = synchronized {
@@ -85,14 +93,19 @@ private[spark] abstract class MemoryManager(
   }
 
   /**
-   * Acquire N bytes of memory to cache the given block, evicting existing ones if necessary.
+   * 为存储BlockId对应的Block,从堆内存或堆外内存获取所需numBytes大小内存.
+    * Acquire N bytes of memory to cache the given block, evicting existing ones if necessary.
    *
    * @return whether all N bytes were successfully granted.
    */
   def acquireStorageMemory(blockId: BlockId, numBytes: Long, memoryMode: MemoryMode): Boolean
 
   /**
-   * Acquire N bytes of memory to unroll the given block, evicting existing ones if necessary.
+   *
+    * 获取N个字节的内存以展开给定的Blcok(你可以把加载到内存中的序列化数据看作未展开的)，必要时移除现有的块。
+    * 这种额外的方法允许子类区分获取存储内存和获取展开内存之间的行为。
+    * 例如，Spark 1.5及之前的内存管理模型限制了可以从展开中释放的空间量。
+    * Acquire N bytes of memory to unroll the given block, evicting existing ones if necessary.
    *
    * This extra method allows subclasses to differentiate behavior between acquiring storage
    * memory and acquiring unroll memory. For instance, the memory management model in Spark
@@ -142,7 +155,8 @@ private[spark] abstract class MemoryManager(
   }
 
   /**
-   * Release N bytes of storage memory.
+   * 释放N字节的存储内存
+    * Release N bytes of storage memory.
    */
   def releaseStorageMemory(numBytes: Long, memoryMode: MemoryMode): Unit = synchronized {
     memoryMode match {
@@ -152,7 +166,8 @@ private[spark] abstract class MemoryManager(
   }
 
   /**
-   * Release all storage memory acquired.
+   * 释放所有的存储内存.
+    * Release all storage memory acquired.
    */
   final def releaseAllStorageMemory(): Unit = synchronized {
     onHeapStorageMemoryPool.releaseAllMemory()
@@ -160,7 +175,8 @@ private[spark] abstract class MemoryManager(
   }
 
   /**
-   * Release N bytes of unroll memory.
+   * 释放N字节展开内存.
+    * Release N bytes of unroll memory.
    */
   final def releaseUnrollMemory(numBytes: Long, memoryMode: MemoryMode): Unit = synchronized {
     releaseStorageMemory(numBytes, memoryMode)
@@ -174,7 +190,8 @@ private[spark] abstract class MemoryManager(
   }
 
   /**
-   * Storage memory currently in use, in bytes.
+   * 已使用的存储内存,单位字节.
+    * Storage memory currently in use, in bytes.
    */
   final def storageMemoryUsed: Long = synchronized {
     onHeapStorageMemoryPool.memoryUsed + offHeapStorageMemoryPool.memoryUsed
