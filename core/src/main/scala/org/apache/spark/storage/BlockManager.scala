@@ -16,6 +16,7 @@
  */
 
 package org.apache.spark.storage
+// scalastyle:off
 
 import java.io._
 import java.lang.ref.{ReferenceQueue => JReferenceQueue, WeakReference}
@@ -440,7 +441,8 @@ private[spark] class BlockManager(
   }
 
   /**
-   * Get the BlockStatus for the block identified by the given ID, if it exists.
+   * 如果存在,获取Block的状态.这主要用于测试.
+    * Get the BlockStatus for the block identified by the given ID, if it exists.
    * NOTE: This is mainly for testing.
    */
   def getStatus(blockId: BlockId): Option[BlockStatus] = {
@@ -452,7 +454,10 @@ private[spark] class BlockManager(
   }
 
   /**
-   * Get the ids of existing blocks that match the given filter. Note that this will
+   * 获取符合给定过滤器的Block序列.请注意，这将查询存储在磁盘block管理器中的block
+    * （block ,manager可能不知道).除了entries缓存中能查询block,还需从DiskBlockManager
+    * 中查询,因为DiskBlockManager可能存在BlockInfoManager不知道的Block.
+    * Get the ids of existing blocks that match the given filter. Note that this will
    * query the blocks stored in the disk block manager (that the block manager
    * may not know of).
    */
@@ -575,6 +580,7 @@ private[spark] class BlockManager(
    */
   def getLocalValues(blockId: BlockId): Option[BlockResult] = {
     logDebug(s"Getting local block $blockId")
+    // 获取block读锁,并使用blockInfo匹配
     blockInfoManager.lockForReading(blockId) match {
       case None =>
         logDebug(s"Block $blockId was not found")
@@ -582,22 +588,30 @@ private[spark] class BlockManager(
       case Some(info) =>
         val level = info.level
         logDebug(s"Level for block $blockId is $level")
+        // 获取当前活动的TaskContext,然后获取task尝试Id
         val taskAttemptId = Option(TaskContext.get()).map(_.taskAttemptId())
         if (level.useMemory && memoryStore.contains(blockId)) {
+          // 先从 MemoryStore中获取Block数据
           val iter: Iterator[Any] = if (level.deserialized) {
             memoryStore.getValues(blockId).get
           } else {
+            // 将BlockId的流反序列化成值的迭代器
             serializerManager.dataDeserializeStream(
               blockId, memoryStore.getBytes(blockId).get.toInputStream())(info.classTag)
           }
+          // 我们需要捕获当前任务Id,这样不同线程完成迭代器遍历能触发
           // We need to capture the current taskId in case the iterator completion is triggered
           // from a different thread which does not have TaskContext set; see SPARK-18406 for
           // discussion.
+          // CompletionIterator实现了迭代器,在其半生对象中能够传一个函数,
+          // 这里传的是releaseLock
           val ci = CompletionIterator[Any, Iterator[Any]](iter, {
             releaseLock(blockId, taskAttemptId)
           })
+          // 创建一个BlockResult,返回
           Some(new BlockResult(ci, DataReadMethod.Memory, info.size))
         } else if (level.useDisk && diskStore.contains(blockId)) {
+          // 从diskStore中读取,和上面很相似,可以自己看看
           val diskData = diskStore.getBytes(blockId)
           val iterToReturn: Iterator[Any] = {
             if (level.deserialized) {
@@ -617,6 +631,7 @@ private[spark] class BlockManager(
           })
           Some(new BlockResult(ci, DataReadMethod.Disk, info.size))
         } else {
+          // 不是内存,不是磁盘,是失败
           handleLocalReadFailure(blockId)
         }
     }
@@ -728,17 +743,20 @@ private[spark] class BlockManager(
   }
 
   /**
-   * Get block from remote block managers as serialized bytes.
+   * 从远程的Block manager中获取序列化字节的Block
+    * Get block from remote block managers as serialized bytes.
    */
   def getRemoteBytes(blockId: BlockId): Option[ChunkedByteBuffer] = {
     logDebug(s"Getting remote block $blockId")
     require(blockId != null, "BlockId is null")
     var runningFailureCount = 0
     var totalFailureCount = 0
-
+    // 应为所有的远程block在driver中注册,所以不需要询问所有executor来获取block状态
     // Because all the remote blocks are registered in driver, it is not necessary to ask
     // all the slave executors to get block status.
+    // 获取位置和状态
     val locationsAndStatus = master.getLocationsAndStatus(blockId)
+    // 块大小,取diskSize和memSize最大值
     val blockSize = locationsAndStatus.map { b =>
       b.status.diskSize.max(b.status.memSize)
     }.getOrElse(0L)

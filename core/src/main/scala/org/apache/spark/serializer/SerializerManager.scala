@@ -232,7 +232,7 @@ private[spark] class SerializerManager(
 
   /**
    *
-    * 将输入流反序列化为值的迭代器
+    * 将输入流反序列化成值的迭代器,在到达迭代器末尾时将其释放.
     * Deserializes an InputStream into an iterator of values and disposes of it when the end of
    * the iterator is reached.
    */

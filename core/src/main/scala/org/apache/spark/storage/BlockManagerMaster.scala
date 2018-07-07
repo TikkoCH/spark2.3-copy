@@ -16,7 +16,7 @@
  */
 
 package org.apache.spark.storage
-
+// scalastyle:off
 import scala.collection.Iterable
 import scala.collection.generic.CanBuildFrom
 import scala.concurrent.Future
@@ -79,18 +79,24 @@ class BlockManagerMaster(
     res
   }
 
-  /** Get locations of the blockId from the driver */
+  /**
+    * 从driver中获取blockid的位置,其实都是通过rpc发送GetLocations消息
+    * Get locations of the blockId from the driver */
   def getLocations(blockId: BlockId): Seq[BlockManagerId] = {
     driverEndpoint.askSync[Seq[BlockManagerId]](GetLocations(blockId))
   }
 
-  /** Get locations as well as status of the blockId from the driver */
+  /**
+    * 从driver中获取blockid的位置和status
+    * Get locations as well as status of the blockId from the driver */
   def getLocationsAndStatus(blockId: BlockId): Option[BlockLocationsAndStatus] = {
     driverEndpoint.askSync[Option[BlockLocationsAndStatus]](
       GetLocationsAndStatus(blockId))
   }
 
-  /** Get locations of multiple blockIds from the driver */
+  /**
+    * 从driver中获取多个blockid的位置
+    * Get locations of multiple blockIds from the driver */
   def getLocations(blockIds: Array[BlockId]): IndexedSeq[Seq[BlockManagerId]] = {
     driverEndpoint.askSync[IndexedSeq[Seq[BlockManagerId]]](
       GetLocationsMultipleBlockIds(blockIds))
