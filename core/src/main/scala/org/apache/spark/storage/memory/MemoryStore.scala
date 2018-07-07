@@ -63,7 +63,7 @@ private[storage] trait BlockEvictionHandler {
   /**
    * 从内存中删除Block,如果可以会存储磁盘.当内从达到限制的并且需要释放空间时调用.
     * 如果数据不在磁盘上,那么不会创建.(我也不太明白).
-    * 本方法调用者必须持有block上的
+    * 本方法调用者在调用之前必须持有block上的写锁,该方法并不释放写锁.<br>
     * Drop a block from memory, possibly putting it on disk if applicable. Called when the memory
    * store reaches its limit and needs to free up space.
    *
@@ -590,87 +590,113 @@ private[spark] class MemoryStore(
     assert(space > 0)
     memoryManager.synchronized {
       var freedMemory = 0L // 已经释放的内存大小
-      val rddToAdd = blockId.flatMap(getRddId) // 需要添加的RDD的RDDBlockId
-      val selectedBlocks = new ArrayBuffer[BlockId]
+      val rddToAdd = blockId.flatMap(getRddId) // 需要添加的RDD的RDDBlockId标记
+      val selectedBlocks = new ArrayBuffer[BlockId]  // 创建要被移除的Block数组
       def blockIsEvictable(blockId: BlockId, entry: MemoryEntry[_]): Boolean = {
+        // 是否可移除,memoryMode为true,并且(rddToAdd是空或rddToAdd不等于Block对应的RDD,防止循环替换)
         entry.memoryMode == memoryMode && (rddToAdd.isEmpty || rddToAdd != getRddId(blockId))
       }
       // This is synchronized to ensure that the set of entries is not changed
       // (because of getValue or getBytes) while traversing the iterator, as that
       // can lead to exceptions.
+      // synchronized保证迭代时候键值对不被改变
       entries.synchronized {
         val iterator = entries.entrySet().iterator()
+        // 已释放内存小于需要释放内存
         while (freedMemory < space && iterator.hasNext) {
           val pair = iterator.next()
           val blockId = pair.getKey
           val entry = pair.getValue
+          // 如果Block是可移除的
           if (blockIsEvictable(blockId, entry)) {
+            // 我们不想驱逐当前正在读取的Block，因此我们需要获得对驱逐候选block的独占写锁.
+            // 我们在这里执行非阻塞“tryLock”以忽略被锁定以供读取的Blcok
             // We don't want to evict blocks which are currently being read, so we need to obtain
             // an exclusive write lock on blocks which are candidates for eviction. We perform a
             // non-blocking "tryLock" here in order to ignore blocks which are locked for reading:
+            // 获得写锁
             if (blockInfoManager.lockForWriting(blockId, blocking = false).isDefined) {
+              // 添加到选中Block数组
               selectedBlocks += blockId
+              // 释放空间+=Block的size
               freedMemory += pair.getValue.size
             }
           }
         }
       }
-
+      // 删除Block方法
       def dropBlock[T](blockId: BlockId, entry: MemoryEntry[T]): Unit = {
+        // 确定Block存储类型
         val data = entry match {
           case DeserializedMemoryEntry(values, _, _) => Left(values)
           case SerializedMemoryEntry(buffer, _, _) => Right(buffer)
         }
+        // 有效的存储级别
         val newEffectiveStorageLevel =
           blockEvictionHandler.dropFromMemory(blockId, () => data)(entry.classTag)
         if (newEffectiveStorageLevel.isValid) {
+          // 如果newEffectiveStorageLevel有效
+          // 该Block仍然存在于至少一个存储中，因此释放锁定但不删除Block信息
           // The block is still present in at least one store, so release the lock
           // but don't delete the block info
           blockInfoManager.unlock(blockId)
         } else {
+          // Block不在任何存储之中,删除Block信息这样该Block可以再次被存储
           // The block isn't present in any store, so delete the block info so that the
           // block can be stored again
           blockInfoManager.removeBlock(blockId)
         }
       }
-
+      // 如果释放的空间大于等于space,说明通过驱逐Block,已经获得了足够的空间
       if (freedMemory >= space) {
         var lastSuccessfulBlock = -1
         try {
           logInfo(s"${selectedBlocks.size} blocks selected for dropping " +
             s"(${Utils.bytesToString(freedMemory)} bytes)")
+          // 遍历selectedBlocks中的每个BlockId,移除对应Block.
           (0 until selectedBlocks.size).foreach { idx =>
             val blockId = selectedBlocks(idx)
+            // 根据BlockId从缓存中获取Block->MemoryEntry键值对
             val entry = entries.synchronized {
               entries.get(blockId)
             }
+            // entry不可能为null,应该只有一个task删除block和entry缓存.但是为了安全起见还是检查一下
             // This should never be null as only one task should be dropping
             // blocks and removing entries. However the check is still here for
             // future safety.
             if (entry != null) {
+              // 删除
               dropBlock(blockId, entry)
               afterDropAction(blockId)
             }
+            // 删除成功,修改lastSuccessfulBlock,idx是selectedBlocks数组下标
             lastSuccessfulBlock = idx
           }
           logInfo(s"After dropping ${selectedBlocks.size} blocks, " +
             s"free memory is ${Utils.bytesToString(maxMemory - blocksMemoryUsed)}")
+          // 删除空间大小.
           freedMemory
         } finally {
+          // 像BlockManager.doPut一样，我们使用finally而不是catch来避免必须处理InterruptedException
           // like BlockManager.doPut, we use a finally rather than a catch to avoid having to deal
           // with InterruptedException
+          // 如果lastSuccessfulBlock!=selectedBlocks.size - 1,说明没有完成遍历.
           if (lastSuccessfulBlock != selectedBlocks.size - 1) {
+            // 处理没有成功,但是我们还持有锁,我们需要释放锁
             // the blocks we didn't process successfully are still locked, so we have to unlock them
             (lastSuccessfulBlock + 1 until selectedBlocks.size).foreach { idx =>
               val blockId = selectedBlocks(idx)
+              // 释放锁
               blockInfoManager.unlock(blockId)
             }
           }
         }
       } else {
+        // 释放空间小于space的话,打印一下日志,不进行存储了
         blockId.foreach { id =>
           logInfo(s"Will not store $id")
         }
+        // 释放所有的锁
         selectedBlocks.foreach { id =>
           blockInfoManager.unlock(id)
         }
@@ -681,7 +707,7 @@ private[spark] class MemoryStore(
 
   // hook for testing, so we can simulate a race
   protected def afterDropAction(blockId: BlockId): Unit = {}
-
+  /** 本地MemoryStore中是否包含给定BlockId对应的Block*/
   def contains(blockId: BlockId): Boolean = {
     entries.synchronized { entries.containsKey(blockId) }
   }
