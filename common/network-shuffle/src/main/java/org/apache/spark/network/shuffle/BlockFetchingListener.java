@@ -30,6 +30,7 @@ public interface BlockFetchingListener extends EventListener {
   void onBlockFetchSuccess(String blockId, ManagedBuffer data);
 
   /**
+   * 对于每个block的失败,至少调用一次
    * Called at least once per block upon failures.
    */
   void onBlockFetchFailure(String blockId, Throwable exception);

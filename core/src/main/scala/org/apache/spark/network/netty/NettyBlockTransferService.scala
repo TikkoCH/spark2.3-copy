@@ -16,7 +16,7 @@
  */
 
 package org.apache.spark.network.netty
-
+// scalastyle:off
 import java.nio.ByteBuffer
 import java.util.{HashMap => JHashMap, Map => JMap}
 
@@ -62,16 +62,22 @@ private[spark] class NettyBlockTransferService(
   private[this] var appId: String = _
 
   override def init(blockDataManager: BlockDataManager): Unit = {
+    // 创建NettyBlockRpcServer.其继承了RPCHandler,Block读写请求都会经由创建NettyBlockRpcServer.
     val rpcHandler = new NettyBlockRpcServer(conf.getAppId, serializer, blockDataManager)
+    // 创建客户端服务端的引导对象
     var serverBootstrap: Option[TransportServerBootstrap] = None
     var clientBootstrap: Option[TransportClientBootstrap] = None
     if (authEnabled) {
       serverBootstrap = Some(new AuthServerBootstrap(transportConf, securityManager))
       clientBootstrap = Some(new AuthClientBootstrap(transportConf, conf.getAppId, securityManager))
     }
+    // 创建TransportContext
     transportContext = new TransportContext(transportConf, rpcHandler)
+    // 客户端工厂
     clientFactory = transportContext.createClientFactory(clientBootstrap.toSeq.asJava)
+    // 创建transportServer
     server = createServer(serverBootstrap.toList)
+    // 应用id
     appId = conf.getAppId
     logInfo(s"Server created on ${hostName}:${server.getPort}")
   }
@@ -108,6 +114,7 @@ private[spark] class NettyBlockTransferService(
       tempFileManager: TempFileManager): Unit = {
     logTrace(s"Fetch blocks from $host:$port (executor id $execId)")
     try {
+      // 匿名类实现createAndStart
       val blockFetchStarter = new RetryingBlockFetcher.BlockFetchStarter {
         override def createAndStart(blockIds: Array[String], listener: BlockFetchingListener) {
           val client = clientFactory.createClient(host, port)
@@ -115,13 +122,16 @@ private[spark] class NettyBlockTransferService(
             transportConf, tempFileManager).start()
         }
       }
-
+      // 获取最大尝试次数
       val maxRetries = transportConf.maxIORetries()
       if (maxRetries > 0) {
+        // 最大尝试次数大于0,创建RetryingBlockFetcher,并调用start方法,
+        // 其中的blockFetchStarter就是创建的局部变量.
         // Note this Fetcher will correctly handle maxRetries == 0; we avoid it just in case there's
         // a bug in this code. We should remove the if statement once we're sure of the stability.
         new RetryingBlockFetcher(transportConf, blockFetchStarter, blockIds, listener).start()
       } else {
+        // 不>0直接调用blockFetchStarter.createAndStart
         blockFetchStarter.createAndStart(blockIds, listener)
       }
     } catch {

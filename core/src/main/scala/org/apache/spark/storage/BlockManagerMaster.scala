@@ -36,13 +36,17 @@ class BlockManagerMaster(
 
   val timeout = RpcUtils.askRpcTimeout(conf)
 
-  /** Remove a dead executor from the driver endpoint. This is only called on the driver side. */
+  /**
+    * 从driver的endpoint中删除已死亡的executor,只能从driver调用.
+    * Remove a dead executor from the driver endpoint. This is only called on the driver side. */
   def removeExecutor(execId: String) {
     tell(RemoveExecutor(execId))
     logInfo("Removed " + execId + " successfully in removeExecutor")
   }
 
-  /** Request removal of a dead executor from the driver endpoint.
+  /**
+    * 请求从driver端点删除死executor。 这只在driver调用。非阻塞
+    * Request removal of a dead executor from the driver endpoint.
    *  This is only called on the driver side. Non-blocking
    */
   def removeExecutorAsync(execId: String) {
@@ -51,7 +55,9 @@ class BlockManagerMaster(
   }
 
   /**
-   * Register the BlockManager's id with the driver. The input BlockManagerId does not contain
+   * 使用驱动程序注册BlockManager的id。 输入BlockManagerId不包含拓扑信息。
+    * 此信息从master获取，我们使用此信息填充更新的BlockManagerId。
+    * Register the BlockManager's id with the driver. The input BlockManagerId does not contain
    * topology information. This information is obtained from the master and we respond with an
    * updated BlockManagerId fleshed out with this information.
    */
@@ -66,7 +72,7 @@ class BlockManagerMaster(
     logInfo(s"Registered BlockManager $updatedId")
     updatedId
   }
-
+  /** 更新Block信息*/
   def updateBlockInfo(
       blockManagerId: BlockManagerId,
       blockId: BlockId,

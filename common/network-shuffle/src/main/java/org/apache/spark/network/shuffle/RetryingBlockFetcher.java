@@ -114,6 +114,7 @@ public class RetryingBlockFetcher {
   }
 
   /**
+   * 启动构造函数中提供的获取所有块函数，并在发生IOException时重试。
    * Initiates the fetch of all blocks provided in the constructor, with possible retries in the
    * event of transient IOExceptions.
    */
@@ -122,10 +123,12 @@ public class RetryingBlockFetcher {
   }
 
   /**
+   * 触发请求以获取尚未成功获取或永久失败的所有blcok.
    * Fires off a request to fetch all blocks that have not been fetched successfully or permanently
    * failed (i.e., by a non-IOException).
    */
   private void fetchAllOutstanding() {
+    // 在锁定条件下开始检索所有的共享状态
     // Start by retrieving our shared state within a synchronized block.
     String[] blockIdsToFetch;
     int numRetries;
@@ -135,14 +138,14 @@ public class RetryingBlockFetcher {
       numRetries = retryCount;
       myListener = currentListener;
     }
-
+    // 现在启动对所有未完成块的提取，如果失败则可能启动重试。
     // Now initiate the fetch on all outstanding blocks, possibly initiating a retry if that fails.
     try {
       fetchStarter.createAndStart(blockIdsToFetch, myListener);
     } catch (Exception e) {
       logger.error(String.format("Exception while beginning fetch of %s outstanding blocks %s",
         blockIdsToFetch.length, numRetries > 0 ? "(after " + numRetries + " retries)" : ""), e);
-
+      // 如果失败,根据shouldRetry确定是否重试.
       if (shouldRetry(e)) {
         initiateRetry();
       } else {
@@ -154,23 +157,30 @@ public class RetryingBlockFetcher {
   }
 
   /**
+   * 在不同线程进行尝试的轻量方法.重试将在配置的等待时间之后调用fetchAllOutstanding（）。
    * Lightweight method which initiates a retry in a different thread. The retry will involve
    * calling fetchAllOutstanding() after a configured wait time.
    */
   private synchronized void initiateRetry() {
+    // 尝试次数加一
     retryCount += 1;
+    // 创建RetryingBlockFetchListener
     currentListener = new RetryingBlockFetchListener();
 
     logger.info("Retrying fetch ({}/{}) for {} outstanding blocks after {} ms",
       retryCount, maxRetries, outstandingBlocksIds.size(), retryWaitTime);
 
     executorService.submit(() -> {
+      // 设置等待时间
       Uninterruptibles.sleepUninterruptibly(retryWaitTime, TimeUnit.MILLISECONDS);
+      // 再调用fetchAllOutstanding方法
       fetchAllOutstanding();
     });
   }
 
   /**
+   * 根据获取block失败异常决定是否重试.我们只有在异常是IOException
+   * 并且重试次数没有超过maxRetries时重试
    * Returns true if we should retry due a block fetch failure. We will retry if and only if
    * the exception was an IOException and we haven't retried 'maxRetries' times already.
    */

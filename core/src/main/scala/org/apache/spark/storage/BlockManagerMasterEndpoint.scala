@@ -16,7 +16,7 @@
  */
 
 package org.apache.spark.storage
-
+// scalastyle:off
 import java.io.IOException
 import java.util.{HashMap => JHashMap}
 
@@ -46,17 +46,19 @@ class BlockManagerMasterEndpoint(
   extends ThreadSafeRpcEndpoint with Logging {
 
   // Mapping from block manager id to the block manager's information.
+  /** block manager id和block manager's information的map缓存*/
   private val blockManagerInfo = new mutable.HashMap[BlockManagerId, BlockManagerInfo]
 
   // Mapping from executor ID to block manager ID.
+  /** executor ID和block manager ID的map缓存*/
   private val blockManagerIdByExecutor = new mutable.HashMap[String, BlockManagerId]
-
   // Mapping from block id to the set of block managers that have the block.
+  /** block id和blockManager的BlockManagerId之间的一对多map缓存*/
   private val blockLocations = new JHashMap[BlockId, mutable.HashSet[BlockManagerId]]
 
   private val askThreadPool = ThreadUtils.newDaemonCachedThreadPool("block-manager-ask-thread-pool")
   private implicit val askExecutionContext = ExecutionContext.fromExecutorService(askThreadPool)
-
+  // 集群所有节点的拓扑结构的映射
   private val topologyMapper = {
     val topologyMapperClassName = conf.get(
       "spark.storage.replication.topologyMapper", classOf[DefaultTopologyMapper].getName)
@@ -70,7 +72,8 @@ class BlockManagerMasterEndpoint(
   val proactivelyReplicate = conf.get("spark.storage.replication.proactive", "false").toBoolean
 
   logInfo("BlockManagerMasterEndpoint up")
-
+  // 重写了RPcEndpoint中的receiveAndReply方法,对于不同消息进行不同响应,
+  // 这和BlockManagerMaster的发送消息是一一对应的.
   override def receiveAndReply(context: RpcCallContext): PartialFunction[Any, Unit] = {
     case RegisterBlockManager(blockManagerId, maxOnHeapMemSize, maxOffHeapMemSize, slaveEndpoint) =>
       context.reply(register(blockManagerId, maxOnHeapMemSize, maxOffHeapMemSize, slaveEndpoint))
@@ -344,25 +347,31 @@ class BlockManagerMasterEndpoint(
   }
 
   /**
-   * Returns the BlockManagerId with topology information populated, if available.
+   * 返回BlockManagerId和拓扑信息
+    * Returns the BlockManagerId with topology information populated, if available.
    */
   private def register(
       idWithoutTopologyInfo: BlockManagerId,
       maxOnHeapMemSize: Long,
       maxOffHeapMemSize: Long,
       slaveEndpoint: RpcEndpointRef): BlockManagerId = {
+    // 传来的id是不包含拓扑信息的.获取真正的拓扑信息再返回
     // the dummy id is not expected to contain the topology information.
     // we get that info here and respond back with a more fleshed out block manager id
+    // 生成BlockManagerId
     val id = BlockManagerId(
-      idWithoutTopologyInfo.executorId,
-      idWithoutTopologyInfo.host,
-      idWithoutTopologyInfo.port,
-      topologyMapper.getTopologyForHost(idWithoutTopologyInfo.host))
+      idWithoutTopologyInfo.executorId,//executor标识
+      idWithoutTopologyInfo.host,// 主机名
+      idWithoutTopologyInfo.port, // 端口
+      topologyMapper.getTopologyForHost(idWithoutTopologyInfo.host))   //拓扑信息
 
     val time = System.currentTimeMillis()
+    // 如果blockManagerInfo不包含该id
     if (!blockManagerInfo.contains(id)) {
+      // 从缓存中获取BlockManagerId
       blockManagerIdByExecutor.get(id.executorId) match {
         case Some(oldId) =>
+          // 已经存在executor,删除.
           // A block manager of the same executor already exists, so remove it (assumed dead)
           logError("Got two different block manager registrations on same executor - "
               + s" will replace old one $oldId with new one $id")
@@ -371,12 +380,13 @@ class BlockManagerMasterEndpoint(
       }
       logInfo("Registering block manager %s with %s RAM, %s".format(
         id.hostPort, Utils.bytesToString(maxOnHeapMemSize + maxOffHeapMemSize), id))
-
+      // 更新缓存
       blockManagerIdByExecutor(id.executorId) = id
 
       blockManagerInfo(id) = new BlockManagerInfo(
         id, System.currentTimeMillis(), maxOnHeapMemSize, maxOffHeapMemSize, slaveEndpoint)
     }
+    // 向事件总线中投递SparkListenerBlockManagerAdded消息.
     listenerBus.post(SparkListenerBlockManagerAdded(time, id, maxOnHeapMemSize + maxOffHeapMemSize,
         Some(maxOnHeapMemSize), Some(maxOffHeapMemSize)))
     id

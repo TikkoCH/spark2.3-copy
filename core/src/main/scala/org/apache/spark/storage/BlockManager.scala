@@ -181,7 +181,8 @@ private[spark] class BlockManager(
   // Address of the server that serves this executor's shuffle files. This is either an external
   // service, or just our own Executor's BlockManager.
   private[spark] var shuffleServerId: BlockManagerId = _
-
+  // 读取其他executor shuffle文件的客户端.可能是一个外部服务,
+  // 或者与其他executor直连的标准BlockTransferService.
   // Client to read other executors' shuffle files. This is either an external service, or just the
   // standard BlockTransferService to directly connect to other Executors.
   private[spark] val shuffleClient = if (externalShuffleServiceEnabled) {
@@ -726,7 +727,9 @@ private[spark] class BlockManager(
   }
 
   /**
-   * Return a list of locations for the given block, prioritizing the local machine since
+   * 返回给定block的位置信息列表.优先本地机器,因为多个Block manager可以共享同一主机,
+    * 然后是同一机架上的主机.
+    * Return a list of locations for the given block, prioritizing the local machine since
    * multiple block managers can share the same host, followed by hosts on the same rack.
    */
   private def sortLocations(locations: Seq[BlockManagerId]): Seq[BlockManagerId] = {
@@ -761,7 +764,8 @@ private[spark] class BlockManager(
       b.status.diskSize.max(b.status.memSize)
     }.getOrElse(0L)
     val blockLocations = locationsAndStatus.map(_.locations).getOrElse(Seq.empty)
-
+    // 如果Block size超过阈值,应将FileManager传递给BlockTransferService,后者将利用其把
+    // 溢出的block写入硬盘;如果没有,传空值意味着block会持久化在内存中.
     // If the block size is above the threshold, we should pass our FileManger to
     // BlockTransferService, which will leverage it to spill the block; if not, then passed-in
     // null value means the block will be persisted in memory.
@@ -770,13 +774,17 @@ private[spark] class BlockManager(
     } else {
       null
     }
-
+    // 获取block位置list.Seq[BlockManagerId]
     val locations = sortLocations(blockLocations)
+    // 最大获取失败次数
     val maxFetchFailures = locations.size
+    // 获取位置的迭代器
     var locationIterator = locations.iterator
+    // 遍历
     while (locationIterator.hasNext) {
       val loc = locationIterator.next()
       logDebug(s"Getting remote block $blockId from $loc")
+      // 通过rpc服务获取block数据
       val data = try {
         blockTransferService.fetchBlockSync(
           loc.host, loc.port, loc.executorId, blockId.toString, tempFileManager).nioByteBuffer()
@@ -784,8 +792,10 @@ private[spark] class BlockManager(
         case NonFatal(e) =>
           runningFailureCount += 1
           totalFailureCount += 1
-
+          // 如果失败次数大于等于最大失败次数,意味着什么都没拿到
           if (totalFailureCount >= maxFetchFailures) {
+            // 不再尝试从任何位置获取数据.我们已经尝试了所有的原始位置,或者已经从master刷新了
+            // 位置列表但是仍一无所获.
             // Give up trying anymore locations. Either we've tried all of the original locations,
             // or we've refreshed the list of locations from the master, and have still
             // hit failures after trying locations from the refreshed list.
@@ -801,6 +811,8 @@ private[spark] class BlockManager(
           // large number of stale entries causing a large number of retries that may
           // take a significant amount of time. To get rid of these stale entries
           // we refresh the block locations after a certain number of fetch failures
+          // 如果runningFailureCount >= maxFailuresBeforeLocationRefresh,会重新调用
+          // 获取位置信息的方法,并且清零runningFailureCount
           if (runningFailureCount >= maxFailuresBeforeLocationRefresh) {
             locationIterator = sortLocations(master.getLocations(blockId)).iterator
             logDebug(s"Refreshed locations from the driver " +
@@ -813,6 +825,7 @@ private[spark] class BlockManager(
       }
 
       if (data != null) {
+        // 获取数据不为null,返回获取数据
         return Some(new ChunkedByteBuffer(data))
       }
       logDebug(s"The value of block $blockId is null")
@@ -822,13 +835,16 @@ private[spark] class BlockManager(
   }
 
   /**
-   * Get a block from the block manager (either local or remote).
+   * 从block manager中获取block(本地或远程).如果block位于本地这需要获取block的读锁,如果
+    * 在远程则不需要锁.如果data迭代器中的数据读到尽头会自动释放锁.
+    * Get a block from the block manager (either local or remote).
    *
    * This acquires a read lock on the block if the block was stored locally and does not acquire
    * any locks if the block was fetched from a remote block manager. The read lock will
    * automatically be freed once the result's `data` iterator is fully consumed.
    */
   def get[T: ClassTag](blockId: BlockId): Option[BlockResult] = {
+    // 先本地获取,再远程获取
     val local = getLocalValues(blockId)
     if (local.isDefined) {
       logInfo(s"Found block $blockId locally")
@@ -843,14 +859,17 @@ private[spark] class BlockManager(
   }
 
   /**
-   * Downgrades an exclusive write lock to a shared read lock.
+   * 把独占写锁降级成共享读锁.
+    * Downgrades an exclusive write lock to a shared read lock.
    */
   def downgradeLock(blockId: BlockId): Unit = {
     blockInfoManager.downgradeLock(blockId)
   }
 
   /**
-   * Release a lock on the given block with explicit TID.
+   * 根据blockId和task尝试ID释放锁.如果我们无法从TaskContext中获取正确的尝试id,
+    * 参数taskAttemptId需要被传进函数.
+    * Release a lock on the given block with explicit TID.
    * The param `taskAttemptId` should be passed in case we can't get the correct TID from
    * TaskContext, for example, the input iterator of a cached RDD iterates to the end in a child
    * thread.
@@ -860,14 +879,16 @@ private[spark] class BlockManager(
   }
 
   /**
-   * Registers a task with the BlockManager in order to initialize per-task bookkeeping structures.
+   * 使用BlockManager注册任务以初始化每个任务的bookeeping。
+    * Registers a task with the BlockManager in order to initialize per-task bookkeeping structures.
    */
   def registerTask(taskAttemptId: Long): Unit = {
     blockInfoManager.registerTask(taskAttemptId)
   }
 
   /**
-   * Release all locks for the given task.
+   * 释放指定任务的所有锁.
+    * Release all locks for the given task.
    *
    * @return the blocks whose locks were released.
    */
@@ -876,7 +897,8 @@ private[spark] class BlockManager(
   }
 
   /**
-   * Retrieve the given block if it exists, otherwise call the provided `makeIterator` method
+   * 获取指定block,否则调用makeIterator方法计算block,持久化,并返回其结果.
+    * Retrieve the given block if it exists, otherwise call the provided `makeIterator` method
    * to compute the block, persist it, and return its values.
    *
    * @return either a BlockResult if the block was successfully cached, or an iterator if the block
@@ -887,6 +909,7 @@ private[spark] class BlockManager(
       level: StorageLevel,
       classTag: ClassTag[T],
       makeIterator: () => Iterator[T]): Either[BlockResult, Iterator[T]] = {
+    // 尝试从本地或远程存储读取block,如果有,我们就不用再本地获取,,存入,返回了.
     // Attempt to read the block from local or remote storage. If it's present, then we don't need
     // to go through the local-get-or-put path.
     get[T](blockId)(classTag) match {
@@ -895,23 +918,29 @@ private[spark] class BlockManager(
       case _ =>
         // Need to compute the block.
     }
+    // 我们需要持有block的锁
     // Initially we hold no locks on this block.
     doPutIterator(blockId, makeIterator, level, classTag, keepReadLock = true) match {
       case None =>
+        // doPut()没有回复,说明block已经存在或存储成功,所以换成读锁
         // doPut() didn't hand work back to us, so the block already existed or was successfully
         // stored. Therefore, we now hold a read lock on the block.
         val blockResult = getLocalValues(blockId).getOrElse {
+          // 因为我们在调用doput和get方法中间时持有读锁,block不应该被驱逐,所以如果get没有返回
+          // block说明内部错误.
           // Since we held a read lock between the doPut() and get() calls, the block should not
           // have been evicted, so get() not returning the block indicates some internal error.
           releaseLock(blockId)
           throw new SparkException(s"get() failed for block $blockId even though we held a lock")
         }
+        // doput已经持有了读锁,getLocalValues又获取了一遍,所以我们需要releaseLock,减少一个锁持有
         // We already hold a read lock on the block from the doPut() call and getLocalValues()
         // acquires the lock again, so we need to call releaseLock() here so that the net number
         // of lock acquisitions is 1 (since the caller will only call release() once).
         releaseLock(blockId)
         Left(blockResult)
       case Some(iter) =>
+        // 存储失败了,很可能数据过大.因此,我们传递输入的迭代器给调用者,由他们决定如何处理.
         // The put failed, likely because the data was too large to fit in memory and could not be
         // dropped to disk. Therefore, we need to pass the input iterator back to the caller so
         // that they can decide what to do with the values (e.g. process them without caching).
@@ -920,7 +949,8 @@ private[spark] class BlockManager(
   }
 
   /**
-   * @return true if the block was stored or false if an error occurred.
+   * 用于将block写入存储体系.实际调用了doPutIterator
+    * @return true if the block was stored or false if an error occurred.
    */
   def putIterator[T: ClassTag](
       blockId: BlockId,
@@ -932,6 +962,7 @@ private[spark] class BlockManager(
       case None =>
         true
       case Some(iter) =>
+        // 调用者不会在意iter中的值,所以释放iterator
         // Caller doesn't care about the iterator values, so we can close the iterator here
         // to free resources earlier
         iter.close()
@@ -940,7 +971,9 @@ private[spark] class BlockManager(
   }
 
   /**
-   * A short circuited method to get a block writer that can write data directly to disk.
+   * 用于创建DiskBlockObjectWriter,DiskBlockObjectWriter可以跳过DiskStore直接写入磁盘.
+    * spark.shuffle.sync属性来配置写入磁盘是否同步.默认异步.
+    * A short circuited method to get a block writer that can write data directly to disk.
    * The Block will be appended to the File specified by filename. Callers should handle error
    * cases.
    */
@@ -1496,14 +1529,16 @@ private[spark] class BlockManager(
   }
 
   /**
-   * Read a block consisting of a single object.
+   * 读取包含单个对象的block
+    * Read a block consisting of a single object.
    */
   def getSingle[T: ClassTag](blockId: BlockId): Option[T] = {
     get[T](blockId).map(_.data.next().asInstanceOf[T])
   }
 
   /**
-   * Write a block consisting of a single object.
+   * 写入包含单个对象的block.
+    * Write a block consisting of a single object.
    *
    * @return true if the block was stored or false if the block was already stored or an
    *         error occurred.
@@ -1520,7 +1555,9 @@ private[spark] class BlockManager(
    * Drop a block from memory, possibly putting it on disk if applicable. Called when the memory
    * store reaches its limit and needs to free up space.
    *
-   * If `data` is not put on disk, it won't be created.
+   * 此方法用于从内存中删除block,当block的存入级别允许写入磁盘,block将被写入磁盘.
+    * 主要在内存不足,需要从内存腾出空间时使用.
+    * If `data` is not put on disk, it won't be created.
    *
    * The caller of this method must hold a write lock on the block before calling this method.
    * This method does not release the write lock.
@@ -1531,15 +1568,18 @@ private[spark] class BlockManager(
       blockId: BlockId,
       data: () => Either[Array[T], ChunkedByteBuffer]): StorageLevel = {
     logInfo(s"Dropping block $blockId from memory")
+    // 当前task尝试线程是否已经持有Blockid对应的写锁.
     val info = blockInfoManager.assertBlockIsLockedForWriting(blockId)
     var blockIsUpdated = false
     val level = info.level
-
+    // 将block写入磁盘
     // Drop to disk, if storage level requires
     if (level.useDisk && !diskStore.contains(blockId)) {
+      // 如果block存储级别允许使用磁盘并且block还没写入磁盘,调用put方法或putBytes写入磁盘
       logInfo(s"Writing block $blockId to disk")
       data() match {
         case Left(elements) =>
+          // put进磁盘
           diskStore.put(blockId) { channel =>
             val out = Channels.newOutputStream(channel)
             serializerManager.dataSerializeStream(
@@ -1548,12 +1588,14 @@ private[spark] class BlockManager(
               elements.toIterator)(info.classTag.asInstanceOf[ClassTag[T]])
           }
         case Right(bytes) =>
+          // putbytes进磁盘
           diskStore.putBytes(blockId, bytes)
       }
       blockIsUpdated = true
     }
-
+    // 删除内存中的block
     // Actually drop from memory store
+    // 如果memoryStore中存在Block,需要从中删除block
     val droppedMemorySize =
       if (memoryStore.contains(blockId)) memoryStore.getSize(blockId) else 0L
     val blockIsRemoved = memoryStore.remove(blockId)
@@ -1562,53 +1604,67 @@ private[spark] class BlockManager(
     } else {
       logWarning(s"Block $blockId could not be dropped from memory as it does not exist")
     }
-
+    // 获取当前block状态
     val status = getCurrentBlockStatus(blockId, info)
     if (info.tellMaster) {
+      // 向master报告block状态
       reportBlockStatus(blockId, status, droppedMemorySize)
     }
     if (blockIsUpdated) {
+      // 更新任务度量信息
       addUpdatedBlockStatusToTaskMetrics(blockId, status)
     }
+    // 返回block存储级别
     status.storageLevel
   }
 
   /**
-   * Remove all blocks belonging to the given RDD.
+   * 删除指定rdd中的所有block
+    * Remove all blocks belonging to the given RDD.
    *
    * @return The number of blocks removed.
    */
   def removeRdd(rddId: Int): Int = {
     // TODO: Avoid a linear scan by creating another mapping of RDD.id to blocks.
     logInfo(s"Removing RDD $rddId")
+    // 获取entries中所有指定RDD的block
     val blocksToRemove = blockInfoManager.entries.flatMap(_._1.asRDDId).filter(_.rddId == rddId)
+    // 遍历删除
     blocksToRemove.foreach { blockId => removeBlock(blockId, tellMaster = false) }
     blocksToRemove.size
   }
 
   /**
-   * Remove all blocks belonging to the given broadcast.
+   * 删除指定广播变量中的所有block
+    * Remove all blocks belonging to the given broadcast.
    */
   def removeBroadcast(broadcastId: Long, tellMaster: Boolean): Int = {
     logDebug(s"Removing broadcast $broadcastId")
+    // 从entries缓存中获取指定广播变量的所有block
     val blocksToRemove = blockInfoManager.entries.map(_._1).collect {
       case bid @ BroadcastBlockId(`broadcastId`, _) => bid
     }
+    // 遍历删除
     blocksToRemove.foreach { blockId => removeBlock(blockId, tellMaster) }
     blocksToRemove.size
   }
 
   /**
-   * Remove a block from both memory and disk.
+   * 删除内存和磁盘上的block.
+    * Remove a block from both memory and disk.
    */
   def removeBlock(blockId: BlockId, tellMaster: Boolean = true): Unit = {
     logDebug(s"Removing block $blockId")
+    // 获取写锁
     blockInfoManager.lockForWriting(blockId) match {
       case None =>
+        // 没获取到就log一下
         // The block has already been removed; do nothing.
         logWarning(s"Asked to remove block $blockId, which does not exist")
       case Some(info) =>
+        // 获取到之后删除
         removeBlockInternal(blockId, tellMaster = tellMaster && info.tellMaster)
+        // 报告master更新状态
         addUpdatedBlockStatusToTaskMetrics(blockId, BlockStatus.empty)
     }
   }

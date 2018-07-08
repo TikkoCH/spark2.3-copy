@@ -16,7 +16,7 @@
  */
 
 package org.apache.spark.storage
-
+// scalastyle:off
 import scala.concurrent.{ExecutionContext, Future}
 
 import org.apache.spark.{MapOutputTracker, SparkEnv}
@@ -39,7 +39,7 @@ class BlockManagerSlaveEndpoint(
   private val asyncThreadPool =
     ThreadUtils.newDaemonCachedThreadPool("block-manager-slave-async-thread-pool")
   private implicit val asyncExecutionContext = ExecutionContext.fromExecutorService(asyncThreadPool)
-
+  // 重写了receiveAndReply方法,用于回复RPC请求,只有简单的几种消息类型
   // Operations that involve removing blocks may be slow and should be done asynchronously
   override def receiveAndReply(context: RpcCallContext): PartialFunction[Any, Unit] = {
     case RemoveBlock(blockId) =>
