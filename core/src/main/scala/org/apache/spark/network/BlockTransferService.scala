@@ -83,7 +83,8 @@ abstract class BlockTransferService extends ShuffleClient with Closeable with Lo
       classTag: ClassTag[_]): Future[Unit]
 
   /**
-   * A special case of [[fetchBlocks]], as it fetches only one block and is blocking.
+   * 一个特殊的fetchBlocks,同步获取单个block
+    * A special case of [[fetchBlocks]], as it fetches only one block and is blocking.
    *
    * It is also only available after [[init]] is invoked.
    */
@@ -93,8 +94,10 @@ abstract class BlockTransferService extends ShuffleClient with Closeable with Lo
       execId: String,
       blockId: String,
       tempFileManager: TempFileManager): ManagedBuffer = {
+    // 要等待的线程的监视器。
     // A monitor for the thread to wait on.
     val result = Promise[ManagedBuffer]()
+    // 实际还是调用了fetchBlocks
     fetchBlocks(host, port, execId, Array(blockId),
       new BlockFetchingListener {
         override def onBlockFetchFailure(blockId: String, exception: Throwable): Unit = {
@@ -112,11 +115,13 @@ abstract class BlockTransferService extends ShuffleClient with Closeable with Lo
           }
         }
       }, tempFileManager)
+    // 等待结果,变成了同步
     ThreadUtils.awaitResult(result.future, Duration.Inf)
   }
 
   /**
-   * Upload a single block to a remote node, available only after [[init]] is invoked.
+   * 同步上传单个block到远程节点
+    * Upload a single block to a remote node, available only after [[init]] is invoked.
    *
    * This method is similar to [[uploadBlock]], except this one blocks the thread
    * until the upload finishes.
@@ -130,6 +135,7 @@ abstract class BlockTransferService extends ShuffleClient with Closeable with Lo
       level: StorageLevel,
       classTag: ClassTag[_]): Unit = {
     val future = uploadBlock(hostname, port, execId, blockId, blockData, level, classTag)
+    // 等待线程完成变成同步,实质还是调用uploadBlock方法
     ThreadUtils.awaitResult(future, Duration.Inf)
   }
 }

@@ -128,7 +128,7 @@ public class RetryingBlockFetcher {
    * failed (i.e., by a non-IOException).
    */
   private void fetchAllOutstanding() {
-    // 在锁定条件下开始检索所有的共享状态
+    // 首先检索同步块中的共享状态。
     // Start by retrieving our shared state within a synchronized block.
     String[] blockIdsToFetch;
     int numRetries;
@@ -138,7 +138,7 @@ public class RetryingBlockFetcher {
       numRetries = retryCount;
       myListener = currentListener;
     }
-    // 现在启动对所有未完成块的提取，如果失败则可能启动重试。
+    // 现在启动对所有未完成块的获取，如果失败则可能启动重试。
     // Now initiate the fetch on all outstanding blocks, possibly initiating a retry if that fails.
     try {
       fetchStarter.createAndStart(blockIdsToFetch, myListener);

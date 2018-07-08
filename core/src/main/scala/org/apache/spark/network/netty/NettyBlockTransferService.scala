@@ -117,7 +117,9 @@ private[spark] class NettyBlockTransferService(
       // 匿名类实现createAndStart
       val blockFetchStarter = new RetryingBlockFetcher.BlockFetchStarter {
         override def createAndStart(blockIds: Array[String], listener: BlockFetchingListener) {
+          // 创建客户端
           val client = clientFactory.createClient(host, port)
+          // 创建一个一对一的BlockFetcher
           new OneForOneBlockFetcher(client, appId, execId, blockIds, listener,
             transportConf, tempFileManager).start()
         }
@@ -142,7 +144,7 @@ private[spark] class NettyBlockTransferService(
   }
 
   override def port: Int = server.getPort
-
+  // 向远端上传block
   override def uploadBlock(
       hostname: String,
       port: Int,
@@ -151,28 +153,32 @@ private[spark] class NettyBlockTransferService(
       blockData: ManagedBuffer,
       level: StorageLevel,
       classTag: ClassTag[_]): Future[Unit] = {
+    // 创建空Promise,调用方法持有该Promise的futrue.
     val result = Promise[Unit]()
+    // 创建rpc客户端
     val client = clientFactory.createClient(hostname, port)
-
+    // 序列化存储级别和类型标记
     // StorageLevel and ClassTag are serialized as bytes using our JavaSerializer.
     // Everything else is encoded using our binary protocol.
     val metadata = JavaUtils.bufferToArray(serializer.newInstance().serialize((level, classTag)))
-
+    // 将Block数据转换或复制为Nio的ByteBuffer类型
     // Convert or copy nio buffer into array in order to serialize it.
     val array = JavaUtils.bufferToArray(blockData.nioByteBuffer())
-
+    // 发送Rpc消息UploadBlock,
     client.sendRpc(new UploadBlock(appId, execId, blockId.name, metadata, array).toByteBuffer,
       new RpcResponseCallback {
         override def onSuccess(response: ByteBuffer): Unit = {
           logTrace(s"Successfully uploaded block $blockId")
+          // 成功的话调用Promise的success方法
           result.success((): Unit)
         }
         override def onFailure(e: Throwable): Unit = {
           logError(s"Error while uploading block $blockId", e)
+          // 失败调用failure方法
           result.failure(e)
         }
       })
-
+    // 返回引用
     result.future
   }
 
