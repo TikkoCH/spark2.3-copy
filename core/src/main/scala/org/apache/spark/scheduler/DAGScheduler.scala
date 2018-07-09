@@ -16,7 +16,7 @@
  */
 
 package org.apache.spark.scheduler
-
+// scalastyle:off
 import java.io.NotSerializableException
 import java.util.Properties
 import java.util.concurrent.TimeUnit
@@ -193,19 +193,24 @@ class DAGScheduler(
   //
   // TODO: Garbage collect information about failure epochs when we know there are no more
   //       stray messages to detect.
+  /** 当检测到一个节点故障时,会将执行失败的Executor和MapOutTracker当前的Epoch添加到
+    * failedEpoch.此外,使用failedEpoch忽略丢失的ShuffleMapTask结果.
+    * */
   private val failedEpoch = new HashMap[String, Long]
-
+  // SparkEnv的组件
   private [scheduler] val outputCommitCoordinator = env.outputCommitCoordinator
-
+  // 复用SparkEnv中的闭包序列化器
   // A closure serializer that we reuse.
   // This is only safe because DAGScheduler runs in a single thread.
   private val closureSerializer = SparkEnv.get.closureSerializer.newInstance()
-
+  // 如果开启,FetchFailed不会造成stage重试
   /** If enabled, FetchFailed will not cause stage retry, in order to surface the problem. */
   private val disallowStageRetryForTest = sc.getConf.getBoolean("spark.test.noStageRetry", false)
 
   /**
-   * Whether to unregister all the outputs on the host in condition that we receive a FetchFailure,
+   * 是否在我们收到FetchFailure的情况下取消注册主机上的所有输出，这将默认设置为false，
+    * 这意味着，我们只取消注册与FetchFailure上的执行程序相关的输出。
+    * Whether to unregister all the outputs on the host in condition that we receive a FetchFailure,
    * this is set default to false, which means, we only unregister the outputs related to the exact
    * executor(instead of the host) on a FetchFailure.
    */
@@ -213,15 +218,16 @@ class DAGScheduler(
     sc.getConf.get(config.UNREGISTER_OUTPUT_ON_HOST_ON_FETCH_FAILURE)
 
   /**
-   * Number of consecutive stage attempts allowed before a stage is aborted.
+   * 在中止stage之前允许的连续stage尝试次数。
+    * Number of consecutive stage attempts allowed before a stage is aborted.
    */
   private[scheduler] val maxConsecutiveStageAttempts =
     sc.getConf.getInt("spark.stage.maxConsecutiveAttempts",
       DAGScheduler.DEFAULT_MAX_CONSECUTIVE_STAGE_ATTEMPTS)
-
+  // 只有一个线程的ThreadScheduledExecutor,功能是对失败的Stage进行重试.
   private val messageScheduler =
     ThreadUtils.newDaemonSingleThreadScheduledExecutor("dag-scheduler-message")
-
+  // 用于事件处理
   private[scheduler] val eventProcessLoop = new DAGSchedulerEventProcessLoop(this)
   taskScheduler.setDAGScheduler(this)
 
@@ -303,26 +309,31 @@ class DAGScheduler(
   def speculativeTaskSubmitted(task: Task[_]): Unit = {
     eventProcessLoop.post(SpeculativeTaskSubmitted(task))
   }
-
+  /** 获取RDD各个分区的TaskLocation列表*/
   private[scheduler]
   def getCacheLocs(rdd: RDD[_]): IndexedSeq[Seq[TaskLocation]] = cacheLocs.synchronized {
     // Note: this doesn't use `getOrElse()` because this method is called O(num tasks) times
     if (!cacheLocs.contains(rdd.id)) {
+      // 如果不包含rdd对应的IndexedSeq[Seq[TaskLocation]]
+      // 如果RDD存储级别是NONE,构造一个空的IndexedSeq[Seq[TaskLocation]]
       // Note: if the storage level is NONE, we don't need to get locations from block manager.
       val locs: IndexedSeq[Seq[TaskLocation]] = if (rdd.getStorageLevel == StorageLevel.NONE) {
         IndexedSeq.fill(rdd.partitions.length)(Nil)
       } else {
+        // 如果存储级别不为NONE,先构造RDD哥哥分区的RDDBlockID数组
         val blockIds =
           rdd.partitions.indices.map(index => RDDBlockId(rdd.id, index)).toArray[BlockId]
+        // 然后再getLocations获取每个RDDBlockId中的位置信息
         blockManagerMaster.getLocations(blockIds).map { bms =>
           bms.map(bm => TaskLocation(bm.host, bm.executorId))
         }
       }
+      // 存入缓存
       cacheLocs(rdd.id) = locs
     }
     cacheLocs(rdd.id)
   }
-
+  // 清空cacheLocs
   private def clearCacheLocs(): Unit = cacheLocs.synchronized {
     cacheLocs.clear()
   }
@@ -500,7 +511,8 @@ class DAGScheduler(
   }
 
   /**
-   * Registers the given jobId among the jobs that need the given stage and
+   * 更新jobid和stage,以及其所有祖先的映射关系.
+    * Registers the given jobId among the jobs that need the given stage and
    * all of that stage's ancestors.
    */
   private def updateJobIdStageIdMaps(jobId: Int, stage: Stage): Unit = {
@@ -508,7 +520,9 @@ class DAGScheduler(
     def updateJobIdStageIdMapsList(stages: List[Stage]) {
       if (stages.nonEmpty) {
         val s = stages.head
+        // 添加到stage的jobids中
         s.jobIds += jobId
+        // 更新jobIdToStageIds中jobId和与每个StageId之间的映射关系
         jobIdToStageIds.getOrElseUpdate(jobId, new HashSet[Int]()) += s.id
         val parentsWithoutThisJobId = s.parents.filter { ! _.jobIds.contains(jobId) }
         updateJobIdStageIdMapsList(parentsWithoutThisJobId ++ stages.tail)
@@ -808,7 +822,9 @@ class DAGScheduler(
     }
   }
 
-  /** Finds the earliest-created active job that needs the stage */
+  /**
+    * 找到Stage的所有已经激活的Job的id
+    * Finds the earliest-created active job that needs the stage */
   // TODO: Probably should actually find among the active jobs that need this
   // stage the one with the highest priority (highest-priority pool, earliest created).
   // That should take care of at least part of the priority inversion problem with
@@ -1524,7 +1540,7 @@ class DAGScheduler(
     mapOutputTracker.removeOutputsOnHost(host)
     clearCacheLocs()
   }
-
+  /** 将Executor的id从failedEpoch中移除*/
   private[scheduler] def handleExecutorAdded(execId: String, host: String) {
     // remove from failedEpoch(execId) ?
     if (failedEpoch.contains(execId)) {
@@ -1695,7 +1711,8 @@ class DAGScheduler(
   }
 
   /**
-   * Gets the locality information associated with a partition of a particular RDD.
+   * 获取rdd指定分区的偏好位置
+    * Gets the locality information associated with a partition of a particular RDD.
    *
    * This method is thread-safe and is called from both DAGScheduler and SparkContext.
    *
@@ -1709,7 +1726,10 @@ class DAGScheduler(
   }
 
   /**
-   * Recursive implementation for getPreferredLocs.
+   * 获取RDD的指定分区的偏好位置.getPreferredLocs的递归实现.
+    * 此方法是线程安全的，因为它只通过线程安全方法访问DAGScheduler状态(getCacheLocs));
+    * 修改此方法时请小心，因为它访问的任何新DAGScheduler状态可能需要额外的同步。
+    * Recursive implementation for getPreferredLocs.
    *
    * This method is thread-safe because it only accesses DAGScheduler state through thread-safe
    * methods (getCacheLocs()); please be careful when modifying this method, because any new
@@ -1719,23 +1739,27 @@ class DAGScheduler(
       rdd: RDD[_],
       partition: Int,
       visited: HashSet[(RDD[_], Int)]): Seq[TaskLocation] = {
+    // 如果分区已经访问过了,没必要重复访问,
     // If the partition has already been visited, no need to re-visit.
     // This avoids exponential path exploration.  SPARK-695
     if (!visited.add((rdd, partition))) {
+      // 之前的分区访问已经返回了Nil.
       // Nil has already been returned for previously visited partitions.
       return Nil
     }
+    // 如果分区已经被缓存了.返回缓存位置.
     // If the partition is cached, return the cache locations
     val cached = getCacheLocs(rdd)(partition)
     if (cached.nonEmpty) {
       return cached
     }
+    // 如果RDD有一些偏好位置,获取
     // If the RDD has some placement preferences (as is the case for input RDDs), get those
     val rddPrefs = rdd.preferredLocations(rdd.partitions(partition)).toList
     if (rddPrefs.nonEmpty) {
       return rddPrefs.map(TaskLocation(_))
     }
-
+    // 如果RDD有窄依赖,选择该RDD的第一个窄依赖的第一个分区
     // If the RDD has narrow dependencies, pick the first partition of the first narrow dependency
     // that has any placement preferences. Ideally we would choose based on transfer sizes,
     // but this will do for now.
