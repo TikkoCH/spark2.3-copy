@@ -42,22 +42,27 @@ import org.apache.spark.util.CallSite
  */
 private[spark] class ActiveJob(
     val jobId: Int,
-    val finalStage: Stage,
-    val callSite: CallSite,
-    val listener: JobListener,
-    val properties: Properties) {
+    val finalStage: Stage,  // 最下游的Stage
+    val callSite: CallSite, // 应用程序调用栈
+    val listener: JobListener, // 监听器
+    val properties: Properties) { // 包含了Job调度,Jobgroup,描述等属性.
 
   /**
-   * Number of partitions we need to compute for this job. Note that result stages may not need
+   * 当前job的分区数.result stage可能不需要计算目标RDD所有的分区,如first()或lookup()函数
+    * Number of partitions we need to compute for this job. Note that result stages may not need
    * to compute all partitions in their target RDD, for actions like first() and lookup().
    */
   val numPartitions = finalStage match {
+      // 如果finalStage是ResultStage,那么分区数是ResultStage的partitions的长度
     case r: ResultStage => r.partitions.length
+      // 如果是shuffleMapStage,那么是rdd.partitions.length
     case m: ShuffleMapStage => m.rdd.partitions.length
   }
 
-  /** Which partitions of the stage have finished */
+  /**
+    * stage的哪个分区已经完成了.
+    * Which partitions of the stage have finished */
   val finished = Array.fill[Boolean](numPartitions)(false)
-
+  // 已经完成task数量
   var numFinished = 0
 }

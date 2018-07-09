@@ -46,7 +46,13 @@ import org.apache.spark.storage.BlockManagerMessages.BlockManagerHeartbeat
 import org.apache.spark.util._
 
 /**
- * The high-level scheduling layer that implements stage-oriented scheduling. It computes a DAG of
+ * DAGScheduler实现了面向DAG的高层次调度,即将DAG中的各个RDD划分到不同的Stage.DAGScheduler可以通过计算将
+  * DAG中的一系列RDD划分到不同的Stage,然后构建这些Stage之间的父子关系,最后将每个Stage按照Partition切分
+  * 为多个task,并以task集合的形式提交给TaskScheduler.所有组件都通过投递DAGSchedulerEvent来使用DAGScheduler.
+  * DAGScheduler内部的DAGSchedulerEventProcessLoop将处理这些事件,并调用DAGScheduler的不同方法.JobListener
+  * 用于对作业中每个Task执行成功或失败进行坚挺,JobWaiter实现了JobListener并最终确定作业的成功和失败.
+  *
+  * The high-level scheduling layer that implements stage-oriented scheduling. It computes a DAG of
  * stages for each job, keeps track of which RDDs and stage outputs are materialized, and finds a
  * minimal schedule to run the job. It then submits stages as TaskSets to an underlying
  * TaskScheduler implementation that runs them on the cluster. A TaskSet contains fully independent
@@ -133,37 +139,47 @@ class DAGScheduler(
   }
 
   def this(sc: SparkContext) = this(sc, sc.taskScheduler)
-
+  // DagScheduler的度量源
   private[spark] val metricsSource: DAGSchedulerSource = new DAGSchedulerSource(this)
-
+  // 下一个Job的id
   private[scheduler] val nextJobId = new AtomicInteger(0)
+  // 总共提交的job数量
   private[scheduler] def numTotalJobs: Int = nextJobId.get()
+  // 下一个Stage的id
   private val nextStageId = new AtomicInteger(0)
-
+  // jobId和stageId之间的map缓存
   private[scheduler] val jobIdToStageIds = new HashMap[Int, HashSet[Int]]
+  // StageId和Stage之间的map关系
   private[scheduler] val stageIdToStage = new HashMap[Int, Stage]
   /**
-   * Mapping from shuffle dependency ID to the ShuffleMapStage that will generate the data for
+   * shuffleid和shuffleMapStage之间的map缓存.从shuffle依赖Id到shuffleMapStage的映射会生成依赖的数据.
+    * 只有包含当前正在运行的job的一部分stage.(当需要shuffle阶段的job完成,映射也会被删除,并且shuffle数据的
+    * 唯一记录会存在MapOutputTracker)
+    * Mapping from shuffle dependency ID to the ShuffleMapStage that will generate the data for
    * that dependency. Only includes stages that are part of currently running job (when the job(s)
    * that require the shuffle stage complete, the mapping will be removed, and the only record of
    * the shuffle data will be in the MapOutputTracker).
    */
   private[scheduler] val shuffleIdToMapStage = new HashMap[Int, ShuffleMapStage]
+  // jobid和激活的job之间的map缓存
   private[scheduler] val jobIdToActiveJob = new HashMap[Int, ActiveJob]
-
+  // 处于等待状态的stage集合
   // Stages we need to run whose parents aren't done
   private[scheduler] val waitingStages = new HashSet[Stage]
-
+  // 处于运行的stage集合
   // Stages we are running right now
   private[scheduler] val runningStages = new HashSet[Stage]
-
+  // 处于失败状态的stage集合
   // Stages that must be resubmitted due to fetch failures
   private[scheduler] val failedStages = new HashSet[Stage]
-
+  // 所有激活的job集合
   private[scheduler] val activeJobs = new HashSet[ActiveJob]
 
   /**
-   * Contains the locations that each RDD's partitions are cached on.  This map's keys are RDD ids
+   * 缓存每个RDD的所有分区的位置信息.键->RDDId;值:每个RDD的分区按照分区号作为索引存储在IndexedSeq中,
+    * 每个RDD的分区作为一个Block以及存储体系的复制因素,RDD的每个分区Block可能存在多个节点的BlockManager上,
+    * RDD的每个分区的位置信息为TaskLocation的列表.
+    * Contains the locations that each RDD's partitions are cached on.  This map's keys are RDD ids
    * and its values are arrays indexed by partition numbers. Each array value is the set of
    * locations where that RDD partition is cached.
    *
@@ -1774,54 +1790,55 @@ private[scheduler] class DAGSchedulerEventProcessLoop(dagScheduler: DAGScheduler
       timerContext.stop()
     }
   }
-
+  // 用于处理不同的event
   private def doOnReceive(event: DAGSchedulerEvent): Unit = event match {
+      // 提交任务事件
     case JobSubmitted(jobId, rdd, func, partitions, callSite, listener, properties) =>
       dagScheduler.handleJobSubmitted(jobId, rdd, func, partitions, callSite, listener, properties)
-
+      // map阶段提交
     case MapStageSubmitted(jobId, dependency, callSite, listener, properties) =>
       dagScheduler.handleMapStageSubmitted(jobId, dependency, callSite, listener, properties)
-
+      // 取消stage
     case StageCancelled(stageId, reason) =>
       dagScheduler.handleStageCancellation(stageId, reason)
-
+      // 取消job
     case JobCancelled(jobId, reason) =>
       dagScheduler.handleJobCancellation(jobId, reason)
-
+      // job组取消
     case JobGroupCancelled(groupId) =>
       dagScheduler.handleJobGroupCancelled(groupId)
-
+      // 取消所有job
     case AllJobsCancelled =>
       dagScheduler.doCancelAllJobs()
-
+      // 添加executor
     case ExecutorAdded(execId, host) =>
       dagScheduler.handleExecutorAdded(execId, host)
-
+      // executor失联
     case ExecutorLost(execId, reason) =>
       val workerLost = reason match {
         case SlaveLost(_, true) => true
         case _ => false
       }
       dagScheduler.handleExecutorLost(execId, workerLost)
-
+      // 删除worker
     case WorkerRemoved(workerId, host, message) =>
       dagScheduler.handleWorkerRemoved(workerId, host, message)
-
+      // 开始task
     case BeginEvent(task, taskInfo) =>
       dagScheduler.handleBeginEvent(task, taskInfo)
-
+      // 推测task提交
     case SpeculativeTaskSubmitted(task) =>
       dagScheduler.handleSpeculativeTaskSubmitted(task)
-
+      // 获取结果
     case GettingResultEvent(taskInfo) =>
       dagScheduler.handleGetTaskResult(taskInfo)
-
+      // 完成
     case completion: CompletionEvent =>
       dagScheduler.handleTaskCompletion(completion)
-
+      // 任务集合失败
     case TaskSetFailed(taskSet, reason, exception) =>
       dagScheduler.handleTaskSetFailed(taskSet, reason, exception)
-
+      // 重新提交失败的stage
     case ResubmitFailedStages =>
       dagScheduler.resubmitFailedStages()
   }

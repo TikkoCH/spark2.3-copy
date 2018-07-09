@@ -47,7 +47,17 @@ import org.apache.spark.util.random.{BernoulliCellSampler, BernoulliSampler, Poi
   SamplingUtils}
 
 /**
- * A Resilient Distributed Dataset (RDD), the basic abstraction in Spark. Represents an immutable,
+ * 一个分布式弹性数据集,spark中的基本抽象概念.代表一个不可变的,可并行操作的分区元素集合.本类包含一些所有RDD
+  * 都可用的基本操作.如map,filter个persist.除此之外org.apache.spark.rdd.PairRDDFunctions包含键值对RDD
+  * 可用的函数,如groupByKey和join.DoubleRDDFunctions包含DoubleRDD的可用操作.SequenceFileRDDFunctions
+  * 包含作为SequenceFiles存储的RDD的可用操作.所有的操作对于类型正确的RDD的是自动可用的.
+  * RDD的五个主要属性:分区列表;每个split用于计算的函数;对于其他RDD的依赖列表;可选的,键值对RDD的分区器;
+  * 可选的,计算每个分片的偏好位置.
+  * spark中所有的计划和执行是基于RDD的方法,允许每个RDD实现自己的计算方式.实际上,用户可以通过重写这些方法
+  * 实现自定义的RDD(如,需要从新的存储系统中读取数据).
+  * 参考<a href="http://people.csail.mit.edu/matei/papers/2012/nsdi_spark.pdf">Spark paper</a>网页,
+  * 查看更多细节.
+  * A Resilient Distributed Dataset (RDD), the basic abstraction in Spark. Represents an immutable,
  * partitioned collection of elements that can be operated on in parallel. This class contains the
  * basic operations available on all RDDs, such as `map`, `filter`, and `persist`. In addition,
  * [[org.apache.spark.rdd.PairRDDFunctions]] contains operations available only on RDDs of key-value
@@ -75,8 +85,8 @@ import org.apache.spark.util.random.{BernoulliCellSampler, BernoulliSampler, Poi
  * for more details on RDD internals.
  */
 abstract class RDD[T: ClassTag](
-    @transient private var _sc: SparkContext,
-    @transient private var deps: Seq[Dependency[_]]
+    @transient private var _sc: SparkContext,  // SparkContext,@transient等价于Java中的transient.不被序列化
+    @transient private var deps: Seq[Dependency[_]] // RDD的依赖
   ) extends Serializable with Logging {
 
   if (classOf[RDD[_]].isAssignableFrom(elementClassTag.runtimeClass)) {
@@ -111,13 +121,17 @@ abstract class RDD[T: ClassTag](
 
   /**
    * :: DeveloperApi ::
+    * 对RDD的分区进行计算
    * Implemented by subclasses to compute a given partition.
    */
   @DeveloperApi
   def compute(split: Partition, context: TaskContext): Iterator[T]
 
   /**
-   * Implemented by subclasses to return the set of partitions in this RDD. This method will only
+   * 获取当前RDD的所有分区.该方法只会被调用一次,在其中实现耗时的计算是安全的.
+    * 数组中的分区必须满足以下属性
+    * rdd.partitions.zipWithIndex.forall { case (partition, index) => partition.index == index }
+    * Implemented by subclasses to return the set of partitions in this RDD. This method will only
    * be called once, so it is safe to implement a time-consuming computation in it.
    *
    * The partitions in this array must satisfy the following property:
@@ -126,24 +140,30 @@ abstract class RDD[T: ClassTag](
   protected def getPartitions: Array[Partition]
 
   /**
-   * Implemented by subclasses to return how this RDD depends on parent RDDs. This method will only
+   * 获取当前RDD的所有依赖.该方法只会被调用一次,在其中实现耗时的计算是安全的.
+    * Implemented by subclasses to return how this RDD depends on parent RDDs. This method will only
    * be called once, so it is safe to implement a time-consuming computation in it.
    */
   protected def getDependencies: Seq[Dependency[_]] = deps
 
   /**
-   * Optionally overridden by subclasses to specify placement preferences.
+   * 子类可选重写方法,获取某一分区的偏好位置.
+    * Optionally overridden by subclasses to specify placement preferences.
    */
   protected def getPreferredLocations(split: Partition): Seq[String] = Nil
 
-  /** Optionally overridden by subclasses to specify how they are partitioned. */
+  /**
+    * 子类可选重写参数,标明如何分区
+    * Optionally overridden by subclasses to specify how they are partitioned. */
   @transient val partitioner: Option[Partitioner] = None
 
   // =======================================================================
   // Methods and fields available on all RDDs
   // =======================================================================
 
-  /** The SparkContext that created this RDD. */
+  /**
+    * get本对象SparkContext的方法
+    * The SparkContext that created this RDD. */
   def sparkContext: SparkContext = sc
 
   /**
@@ -151,10 +171,14 @@ abstract class RDD[T: ClassTag](
     * A unique ID for this RDD (within its SparkContext). */
   val id: Int = sc.newRddId()
 
-  /** A friendly name for this RDD */
+  /**
+    * RDD名称.
+    * A friendly name for this RDD */
   @transient var name: String = _
 
-  /** Assign a name to this RDD */
+  /**
+    * 设置名称
+    * Assign a name to this RDD */
   def setName(_name: String): this.type = {
     name = _name
     this
@@ -221,37 +245,47 @@ abstract class RDD[T: ClassTag](
     this
   }
 
-  /** Get the RDD's current storage level, or StorageLevel.NONE if none is set. */
+  /**
+    * 返回RDD当前的存储级别,如果未设置返回NONE
+    * Get the RDD's current storage level, or StorageLevel.NONE if none is set. */
   def getStorageLevel: StorageLevel = storageLevel
 
   // Our dependencies and partitions will be gotten by calling subclass's methods below, and will
   // be overwritten when we're checkpointed
+  // 等价于deps,但是这个可被序列化
   private var dependencies_ : Seq[Dependency[_]] = _
+  // 存储当前RDD的所有分区的数组
   @transient private var partitions_ : Array[Partition] = _
 
   /** An Option holding our checkpoint RDD, if we are checkpointed */
   private def checkpointRDD: Option[CheckpointRDD[T]] = checkpointData.flatMap(_.checkpointRDD)
 
   /**
-   * Get the list of dependencies of this RDD, taking into account whether the
+   * 获取当前RDD的所有以来的list.会考虑RDD是否是检查点.
+    * Get the list of dependencies of this RDD, taking into account whether the
    * RDD is checkpointed or not.
    */
   final def dependencies: Seq[Dependency[_]] = {
+    // 从chckpoint中获取RDD,并将这些RDD封装为OneToOneDependency列表.如果获取到RDD依赖就返回了
     checkpointRDD.map(r => List(new OneToOneDependency(r))).getOrElse {
       if (dependencies_ == null) {
+        // 如果dependencies_为null,调用getDependencies获取RDD的依赖,并赋值
         dependencies_ = getDependencies
       }
-      dependencies_
+      dependencies_ //返回
     }
   }
 
   /**
-   * Get the array of partitions of this RDD, taking into account whether the
+   * 获取本RDD的分区数组,会考虑RDD是否是检查点
+    * Get the array of partitions of this RDD, taking into account whether the
    * RDD is checkpointed or not.
    */
   final def partitions: Array[Partition] = {
+    // 从checkpoint查找,获取partition属性
     checkpointRDD.map(_.partitions).getOrElse {
       if (partitions_ == null) {
+        // getPartitions方法获取所有分区
         partitions_ = getPartitions
         partitions_.zipWithIndex.foreach { case (partition, index) =>
           require(partition.index == index,
@@ -269,10 +303,13 @@ abstract class RDD[T: ClassTag](
   final def getNumPartitions: Int = partitions.length
 
   /**
-   * Get the preferred locations of a partition, taking into account whether the
+   * 获取分区的偏好位置,会考虑其是不是检查点
+    * Get the preferred locations of a partition, taking into account whether the
    * RDD is checkpointed.
    */
   final def preferredLocations(split: Partition): Seq[String] = {
+    // 先从Checkpoint中保存的RDD互殴去偏好位置,如果没有保存Checkpoint,
+    // 调用getPreferredLocations方法获取
     checkpointRDD.map(_.getPreferredLocations(split)).getOrElse {
       getPreferredLocations(split)
     }
@@ -292,7 +329,8 @@ abstract class RDD[T: ClassTag](
   }
 
   /**
-   * Return the ancestors of the given RDD that are related to it only through a sequence of
+   * 获取当前RDD的窄依赖祖先的RDD序列.这使用DFS遍历给定的RDD依赖关系树，但不保留返回的RDD的排序。
+    * Return the ancestors of the given RDD that are related to it only through a sequence of
    * narrow dependencies. This traverses the given RDD's dependency tree using DFS, but maintains
    * no ordering on the RDDs returned.
    */
@@ -300,17 +338,21 @@ abstract class RDD[T: ClassTag](
     val ancestors = new mutable.HashSet[RDD[_]]
 
     def visit(rdd: RDD[_]): Unit = {
+      // 获取窄依赖
       val narrowDependencies = rdd.dependencies.filter(_.isInstanceOf[NarrowDependency[_]])
+      // 依赖转换成rdd,获取父rdd
       val narrowParents = narrowDependencies.map(_.rdd)
+      // 没有访问到的窄依赖父亲
       val narrowParentsNotVisited = narrowParents.filterNot(ancestors.contains)
+      // 循环,添加到ancestors,并且递归调用visit方法
       narrowParentsNotVisited.foreach { parent =>
         ancestors.add(parent)
         visit(parent)
       }
     }
-
+    // 向祖先集合ancestors添加元素
     visit(this)
-
+    // 确保不包含自己
     // In case there is a cycle, do not include the root itself
     ancestors.filterNot(_ == this).toSeq
   }
@@ -1655,14 +1697,18 @@ abstract class RDD[T: ClassTag](
   // =======================================================================
   // Other internal methods and fields
   // =======================================================================
-
+  // 当前RDD的存储级别
   private var storageLevel: StorageLevel = StorageLevel.NONE
 
-  /** User code that created this RDD (e.g. `textFile`, `parallelize`). */
+  /**
+    * 创建当前RDD的用户代码.如使用textFile,或parallelize创建RDD.
+    * User code that created this RDD (e.g. `textFile`, `parallelize`). */
   @transient private[spark] val creationSite = sc.getCallSite()
 
   /**
-   * The scope associated with the operation that created this RDD.
+   * 与创建本RDD操作向关联的作用域.这比callsite更灵活并且可以分层定义.可以查看RDDOperationScope
+    * 获取更多细节.如果用户实例化本RDD时没有经由任何Spark操作,其作用域为未定义.
+    * The scope associated with the operation that created this RDD.
    *
    * This is more flexible than the call site and can be defined hierarchically. For more
    * detail, see the documentation of {{RDDOperationScope}}. This scope is not defined if the
@@ -1675,9 +1721,12 @@ abstract class RDD[T: ClassTag](
   private[spark] def getCreationSite: String = Option(creationSite).map(_.shortForm).getOrElse("")
 
   private[spark] def elementClassTag: ClassTag[T] = classTag[T]
-
+  // 当前RDD检查点数据
   private[spark] var checkpointData: Option[RDDCheckpointData[T]] = None
-
+  // 是否对所有标记了需要保存检查点的祖先保存检查点.默认情况下,我们找到了第一个这样的RDD就停止了,
+  // 这是一种优化手段,这减少了写入数据数量但是对所有的工作来说这并不安全.例如,对于流处理来说,
+  // 每个批处理,我们可能会对RDD和其父RDD生成检查点,这种情况下,其父检查点永远不会被使用,并且依赖关系
+  // 也永远不会删除,这在长时间运行会导致内存溢出.
   // Whether to checkpoint all ancestor RDDs that are marked for checkpointing. By default,
   // we stop as soon as we find the first such RDD, an optimization that allows us to write
   // less data but is not safe for all workloads. E.g. in streaming we may checkpoint both
@@ -1696,7 +1745,9 @@ abstract class RDD[T: ClassTag](
     dependencies(j).rdd.asInstanceOf[RDD[U]]
   }
 
-  /** The [[org.apache.spark.SparkContext]] that this RDD was created on. */
+  /**
+    * 返回SparkContext
+    * The [[org.apache.spark.SparkContext]] that this RDD was created on. */
   def context: SparkContext = sc
 
   /**
@@ -1715,7 +1766,7 @@ abstract class RDD[T: ClassTag](
   private[spark] def retag(implicit classTag: ClassTag[T]): RDD[T] = {
     this.mapPartitions(identity, preservesPartitioning = true)(classTag)
   }
-
+  // 是否已经调用了doCheckpoint方法设置检查点,这可以避免对RDD多次设置检查点.
   // Avoid handling doCheckpoint multiple times to prevent excessive recursion
   @transient private var doCheckpointCalled = false
 

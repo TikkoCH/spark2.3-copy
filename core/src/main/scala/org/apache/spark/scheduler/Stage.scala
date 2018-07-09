@@ -54,27 +54,34 @@ import org.apache.spark.util.CallSite
  *   RDD was created, for a shuffle map stage, or where the action for a result stage was called.
  */
 private[scheduler] abstract class Stage(
-    val id: Int,
-    val rdd: RDD[_],
-    val numTasks: Int,
-    val parents: List[Stage],
-    val firstJobId: Int,
-    val callSite: CallSite)
+    val id: Int,              // Stage的身份标识
+    val rdd: RDD[_],          // 当前Stage包含的RDD
+    val numTasks: Int,        // 当前Stage的task数量
+    val parents: List[Stage], // 当前Stage的父Stage列表.
+    val firstJobId: Int,      // 第一个提交当前Stage的Job的JobId.FIFO调度时,通过该属性首先计算来自
+                                       //较早Job的Stage,活着发生故障时更快的恢复.
+    val callSite: CallSite)   // 应用程序中雨当前Stage相关联的调用栈信息.
   extends Logging {
-
+  /** 当前Stage的分区数量.实际是rdd的分区数量.*/
   val numPartitions = rdd.partitions.length
 
-  /** Set of jobs that this stage belongs to. */
+  /**
+    * Stage所属的JobId集合
+    * Set of jobs that this stage belongs to. */
   val jobIds = new HashSet[Int]
 
-  /** The ID to use for the next new attempt for this stage. */
+  /**
+    * Stage下一次尝试的id
+    * The ID to use for the next new attempt for this stage. */
   private var nextAttemptId: Int = 0
 
   val name: String = callSite.shortForm
   val details: String = callSite.longForm
 
   /**
-   * Pointer to the [[StageInfo]] object for the most recent attempt. This needs to be initialized
+   * Stage最近一次尝试信息,StageInfo.在任何尝试实际创建之前,需要先初始化,因为DAGSchduler使用StageInfo来
+    * 告知Spark监听器job何时开始
+    * Pointer to the [[StageInfo]] object for the most recent attempt. This needs to be initialized
    * here, before any attempts have actually been created, because the DAGScheduler uses this
    * StageInfo to tell SparkListeners when a job starts (which happens before any stage attempts
    * have been created).
@@ -82,29 +89,36 @@ private[scheduler] abstract class Stage(
   private var _latestInfo: StageInfo = StageInfo.fromStage(this, nextAttemptId)
 
   /**
-   * Set of stage attempt IDs that have failed with a FetchFailure. We keep track of these
+   * 发生过FetchFailure的Stage尝试id的集合.我们追踪这些失败是为了避免没完没了的失败重试.
+    * Set of stage attempt IDs that have failed with a FetchFailure. We keep track of these
    * failures in order to avoid endless retries if a stage keeps failing with a FetchFailure.
    * We keep track of each attempt ID that has failed to avoid recording duplicate failures if
    * multiple tasks from the same stage attempt fail (SPARK-5945).
    */
   val fetchFailedAttemptIds = new HashSet[Int]
-
+  // 清空fetchFailedAttemptIds
   private[scheduler] def clearFailures() : Unit = {
     fetchFailedAttemptIds.clear()
   }
 
-  /** Creates a new attempt for this stage by creating a new StageInfo with a new attempt ID. */
+  /**
+    * 通过创建新的StageInfo和新的尝试Id为当前Stage创建新的尝试.
+    * Creates a new attempt for this stage by creating a new StageInfo with a new attempt ID. */
   def makeNewStageAttempt(
       numPartitionsToCompute: Int,
       taskLocalityPreferences: Seq[Seq[TaskLocation]] = Seq.empty): Unit = {
     val metrics = new TaskMetrics
     metrics.register(rdd.sparkContext)
+    // 创建新的SatgeInfo,赋值给_latestInfo
     _latestInfo = StageInfo.fromStage(
       this, nextAttemptId, Some(numPartitionsToCompute), metrics, taskLocalityPreferences)
+    // 下一个尝试Id+1
     nextAttemptId += 1
   }
 
-  /** Returns the StageInfo for the most recent attempt for this stage. */
+  /**
+    * 返回最近一次Stage尝试的StageInfo.
+    * Returns the StageInfo for the most recent attempt for this stage. */
   def latestInfo: StageInfo = _latestInfo
 
   override final def hashCode(): Int = id
@@ -114,6 +128,8 @@ private[scheduler] abstract class Stage(
     case _ => false
   }
 
-  /** Returns the sequence of partition ids that are missing (i.e. needs to be computed). */
+  /**
+    * 找到还未执行完成的分区.
+    * Returns the sequence of partition ids that are missing (i.e. needs to be computed). */
   def findMissingPartitions(): Seq[Int]
 }

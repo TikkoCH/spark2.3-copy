@@ -29,28 +29,35 @@ import org.apache.spark.storage.RDDInfo
  */
 @DeveloperApi
 class StageInfo(
-    val stageId: Int,
+    val stageId: Int,             //Stage的id
     @deprecated("Use attemptNumber instead", "2.3.0") val attemptId: Int,
-    val name: String,
-    val numTasks: Int,
-    val rddInfos: Seq[RDDInfo],
-    val parentIds: Seq[Int],
-    val details: String,
-    val taskMetrics: TaskMetrics = null,
-    private[spark] val taskLocalityPreferences: Seq[Seq[TaskLocation]] = Seq.empty) {
-  /** When this stage was submitted from the DAGScheduler to a TaskScheduler. */
+    val name: String,             // 名称
+    val numTasks: Int,            // 任务数量
+    val rddInfos: Seq[RDDInfo],   // RDD信息列表
+    val parentIds: Seq[Int],      // 父StageId的序列
+    val details: String,          // 详细线程栈信息
+    val taskMetrics: TaskMetrics = null, // Task度量信息
+    private[spark] val taskLocalityPreferences: Seq[Seq[TaskLocation]] = Seq.empty) { //存储任务本地行偏好
+  /**
+    * DAGScheduler将当前Stage提交给TaskScheduler的时间
+    * When this stage was submitted from the DAGScheduler to a TaskScheduler. */
   var submissionTime: Option[Long] = None
-  /** Time when all tasks in the stage completed or when the stage was cancelled. */
+  /**
+    * Stage中所有Task完成的时间,或Stage被取消的时间
+    * Time when all tasks in the stage completed or when the stage was cancelled. */
   var completionTime: Option[Long] = None
-  /** If the stage failed, the reason why. */
+  /**
+    * 如果Stage失败,记录原因
+    * If the stage failed, the reason why. */
   var failureReason: Option[String] = None
 
   /**
-   * Terminal values of accumulables updated during this stage, including all the user-defined
+   * Stage更新过的聚合器的最终值,包含所有用户定义的聚合器
+    * Terminal values of accumulables updated during this stage, including all the user-defined
    * accumulators.
    */
   val accumulables = HashMap[Long, AccumulableInfo]()
-
+  // 保存失败原因和完成时间
   def stageFailed(reason: String) {
     failureReason = Some(reason)
     completionTime = Some(System.currentTimeMillis)
@@ -73,7 +80,9 @@ class StageInfo(
 
 private[spark] object StageInfo {
   /**
-   * Construct a StageInfo from a Stage.
+   * 用于在Stage中构建StageInfo.每一个Stage都关联了一个或多个RDD,和shuffle依赖为Stage标记的边界.
+    * 因此，通过一系列窄依赖关系与此Stage的RDD相关的所有祖先RDD也应该与此阶段相关联.
+    * Construct a StageInfo from a Stage.
    *
    * Each Stage is associated with one or many RDDs, with the boundary of a Stage marked by
    * shuffle dependencies. Therefore, all ancestor RDDs related to this Stage's RDD through a
@@ -86,8 +95,11 @@ private[spark] object StageInfo {
       taskMetrics: TaskMetrics = null,
       taskLocalityPreferences: Seq[Seq[TaskLocation]] = Seq.empty
     ): StageInfo = {
+    // 获取RDD的祖先以来中属于窄依赖的RDD序列.对于ancestorRddInfos中的每个RDD,创建RDDInfo对象
     val ancestorRddInfos = stage.rdd.getNarrowAncestors.map(RDDInfo.fromRdd)
+    // 给当前Stage的RDD创建对应的RDDInfo,然后结合上一步的祖先RDDInfo列表
     val rddInfos = Seq(RDDInfo.fromRdd(stage.rdd)) ++ ancestorRddInfos
+    // 创建StageInfo对象
     new StageInfo(
       stage.id,
       attemptId,
