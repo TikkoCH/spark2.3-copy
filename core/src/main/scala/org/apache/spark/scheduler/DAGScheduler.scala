@@ -289,9 +289,11 @@ class DAGScheduler(
   }
 
   /**
-   * Called by TaskScheduler implementation when a host is added.
+   * 当一个主机被添加,TaskScheduler实现会调用该方法,
+    * Called by TaskScheduler implementation when a host is added.
    */
   def executorAdded(execId: String, host: String): Unit = {
+    // 发送ExecutorAdded事件
     eventProcessLoop.post(ExecutorAdded(execId, host))
   }
 
@@ -1543,6 +1545,7 @@ class DAGScheduler(
   /** 将Executor的id从failedEpoch中移除*/
   private[scheduler] def handleExecutorAdded(execId: String, host: String) {
     // remove from failedEpoch(execId) ?
+    // 如果包含,删除
     if (failedEpoch.contains(execId)) {
       logInfo("Host added was in lost list earlier: " + host)
       failedEpoch -= execId
