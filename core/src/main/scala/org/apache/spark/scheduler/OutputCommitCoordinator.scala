@@ -113,7 +113,7 @@ private[spark] class OutputCommitCoordinator(conf: SparkConf, isDriver: Boolean)
 
   /**
    * DAGScheduler会当Stage开始时调用该方法.该方法用于启动给定Stage的输出提交到HDFS的协调机制.
-    * 本质上为创建给定StageStage样例类,该样例类包含三个属性:
+    * 本质上为创建给定StageState样例类,该样例类包含三个属性:
     * numPartitions;authorizedCommitters;failures,该样例类就在上面可以看一下.
     * Called by the DAGScheduler when a stage starts.
    *
@@ -129,7 +129,7 @@ private[spark] class OutputCommitCoordinator(conf: SparkConf, isDriver: Boolean)
   private[scheduler] def stageEnd(stage: StageId): Unit = synchronized {
     stageStates.remove(stage)
   }
-  // 当指定Stage的制定分区的任务执行完成会调用taskCompeted方法.
+  // 当指定Stage的指定分区的任务执行完成会调用taskCompeted方法.
   // Called by DAGScheduler
   private[scheduler] def taskCompleted(
       stage: StageId,

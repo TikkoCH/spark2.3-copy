@@ -16,7 +16,7 @@
  */
 
 package org.apache.spark.scheduler
-
+// scalastyle:off
 /**
  * An interface for sort algorithm
  * FIFO: FIFO algorithm between TaskSetManagers
@@ -30,17 +30,22 @@ private[spark] class FIFOSchedulingAlgorithm extends SchedulingAlgorithm {
   override def comparator(s1: Schedulable, s2: Schedulable): Boolean = {
     val priority1 = s1.priority
     val priority2 = s2.priority
+    // 比较s1和s2的优先级
     var res = math.signum(priority1 - priority2)
     if (res == 0) {
       val stageId1 = s1.stageId
       val stageId2 = s2.stageId
+      // 如果优先级相等,那么比较stageId
       res = math.signum(stageId1 - stageId2)
     }
+    // 如果小于0,优先s1,否则s2
     res < 0
   }
 }
 
 private[spark] class FairSchedulingAlgorithm extends SchedulingAlgorithm {
+  // 如果s1中的runningTask数量小于s1的minShare,并且S2中runningTask数量
+  // 大于等于S2中的minShare,优先s1.
   override def comparator(s1: Schedulable, s2: Schedulable): Boolean = {
     val minShare1 = s1.minShare
     val minShare2 = s2.minShare
@@ -54,20 +59,30 @@ private[spark] class FairSchedulingAlgorithm extends SchedulingAlgorithm {
     val taskToWeightRatio2 = runningTasks2.toDouble / s2.weight.toDouble
 
     var compare = 0
+
     if (s1Needy && !s2Needy) {
+      // 如果s1中的runningTask数量小于s1的minShare,并且S2中runningTask数量
+      // 大于等于S2中的minShare,优先s1.
       return true
     } else if (!s1Needy && s2Needy) {
+      // 和上面相反,优先s2
       return false
     } else if (s1Needy && s2Needy) {
+      // 如果s1和s2的runningTask<minShare,求runningTasks/math.max(minShare, 1.0)
       compare = minShareRatio1.compareTo(minShareRatio2)
     } else {
+      // 如果s1和s2的runningTask>=minShare,求runningTasks / s.weight
       compare = taskToWeightRatio1.compareTo(taskToWeightRatio2)
     }
+    // 然后比较compare
     if (compare < 0) {
+      // 小于0,优先s1
       true
     } else if (compare > 0) {
+      // 大于0 优先s2
       false
     } else {
+      // 仍然相等,比较名称
       s1.name < s2.name
     }
   }
