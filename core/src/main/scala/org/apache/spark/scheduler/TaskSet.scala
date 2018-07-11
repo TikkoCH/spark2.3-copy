@@ -20,15 +20,16 @@ package org.apache.spark.scheduler
 import java.util.Properties
 
 /**
- * A set of tasks submitted together to the low-level TaskScheduler, usually representing
+ * DAGScheduler将Task提交给TaskScheduler时,将多个Task打包成TaskSet,该类对象是Task调度管理的基本单位.
+  * A set of tasks submitted together to the low-level TaskScheduler, usually representing
  * missing partitions of a particular stage.
  */
 private[spark] class TaskSet(
-    val tasks: Array[Task[_]],
-    val stageId: Int,
-    val stageAttemptId: Int,
-    val priority: Int,
-    val properties: Properties) {
+    val tasks: Array[Task[_]],  // Task数组
+    val stageId: Int,           // stageId,所属stage
+    val stageAttemptId: Int,    // stage尝试id
+    val priority: Int,          // 优先级,通常以JobId作为优先级
+    val properties: Properties) { // job有关调度,job group,描述等属性
   val id: String = stageId + "." + stageAttemptId
 
   override def toString: String = "TaskSet " + id

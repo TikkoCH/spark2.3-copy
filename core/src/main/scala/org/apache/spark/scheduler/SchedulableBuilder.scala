@@ -29,15 +29,17 @@ import org.apache.spark.scheduler.SchedulingMode.SchedulingMode
 import org.apache.spark.util.Utils
 
 /**
- * An interface to build Schedulable tree
+ * 构建调度树的接口,buildPools构建树的节点(pool),addTaskSetManager构建叶子节点(TaskSetManagers).
+  * An interface to build Schedulable tree
  * buildPools: build the tree nodes(pools)
  * addTaskSetManager: build the leaf nodes(TaskSetManagers)
  */
 private[spark] trait SchedulableBuilder {
+  /** 返回根调度吃*/
   def rootPool: Pool
-
+  /** 对调度池进行构建*/
   def buildPools(): Unit
-
+  /** 向调度池内添加TaskSetManager*/
   def addTaskSetManager(manager: Schedulable, properties: Properties): Unit
 }
 
@@ -47,7 +49,7 @@ private[spark] class FIFOSchedulableBuilder(val rootPool: Pool)
   override def buildPools() {
     // nothing
   }
-
+  // 向根调度池添加TaskSetManager
   override def addTaskSetManager(manager: Schedulable, properties: Properties) {
     rootPool.addSchedulable(manager)
   }
@@ -55,41 +57,57 @@ private[spark] class FIFOSchedulableBuilder(val rootPool: Pool)
 
 private[spark] class FairSchedulableBuilder(val rootPool: Pool, conf: SparkConf)
   extends SchedulableBuilder with Logging {
-
+  // 调度系统的分配属性文件,spark.scheduler.allocation.file配置,会读取该配置的文件
   val SCHEDULER_ALLOCATION_FILE_PROPERTY = "spark.scheduler.allocation.file"
   val schedulerAllocFile = conf.getOption(SCHEDULER_ALLOCATION_FILE_PROPERTY)
+  // // 默认是farscheduler.xml
   val DEFAULT_SCHEDULER_FILE = "fairscheduler.xml"
+  // TaskSetManager的公平调度池名称
   val FAIR_SCHEDULER_PROPERTIES = "spark.scheduler.pool"
+  // 默认调度池名称
   val DEFAULT_POOL_NAME = "default"
+  // 配置文件中<minshare>节点的值
   val MINIMUM_SHARES_PROPERTY = "minShare"
+  // 调度模式<schedulingMode>节点的值
   val SCHEDULING_MODE_PROPERTY = "schedulingMode"
+  // 权重属性
   val WEIGHT_PROPERTY = "weight"
+  // <pool name = "name"> 文件中name属性的值
   val POOL_NAME_PROPERTY = "@name"
+  // 调度池属性
   val POOLS_PROPERTY = "pool"
+  // 默认是FIFO
   val DEFAULT_SCHEDULING_MODE = SchedulingMode.FIFO
+  // 默认minshare=0
   val DEFAULT_MINIMUM_SHARE = 0
+  // 默认weight=1
   val DEFAULT_WEIGHT = 1
 
   override def buildPools() {
     var fileData: Option[(InputStream, String)] = None
     try {
+      // 从schedulerAllocFile中读取文件输入流
       fileData = schedulerAllocFile.map { f =>
         val fis = new FileInputStream(f)
         logInfo(s"Creating Fair Scheduler pools from $f")
         Some((fis, f))
       }.getOrElse {
+        // 如果get有值就返回(fis, f),没有值执行以下操作
+        // 从classpath下获取DEFAULT_SCHEDULER_FILE文件
         val is = Utils.getSparkClassLoader.getResourceAsStream(DEFAULT_SCHEDULER_FILE)
         if (is != null) {
           logInfo(s"Creating Fair Scheduler pools from default file: $DEFAULT_SCHEDULER_FILE")
+          // 不等于null,就返回(is, DEFAULT_SCHEDULER_FILE)
           Some((is, DEFAULT_SCHEDULER_FILE))
         } else {
+          // 等于null,返回None
           logWarning("Fair Scheduler configuration file not found so jobs will be scheduled in " +
             s"FIFO order. To use fair scheduling, configure pools in $DEFAULT_SCHEDULER_FILE or " +
             s"set $SCHEDULER_ALLOCATION_FILE_PROPERTY to a file that contains the configuration.")
           None
         }
       }
-
+      // 对文件输入流解析并构建调度池
       fileData.foreach { case (is, fileName) => buildFairSchedulerPool(is, fileName) }
     } catch {
       case NonFatal(t) =>
@@ -99,17 +117,21 @@ private[spark] class FairSchedulableBuilder(val rootPool: Pool, conf: SparkConf)
         logError(message, t)
         throw t
     } finally {
+      // 关闭流
       fileData.foreach { case (is, fileName) => is.close() }
     }
 
     // finally create "default" pool
+    // 构建默认调度池.
     buildDefaultPool()
   }
 
   private def buildDefaultPool() {
     if (rootPool.getSchedulableByName(DEFAULT_POOL_NAME) == null) {
+      // 创建默认调度池
       val pool = new Pool(DEFAULT_POOL_NAME, DEFAULT_SCHEDULING_MODE,
         DEFAULT_MINIMUM_SHARE, DEFAULT_WEIGHT)
+      // 添加到根调度池
       rootPool.addSchedulable(pool)
       logInfo("Created default pool: %s, schedulingMode: %s, minShare: %d, weight: %d".format(
         DEFAULT_POOL_NAME, DEFAULT_SCHEDULING_MODE, DEFAULT_MINIMUM_SHARE, DEFAULT_WEIGHT))
@@ -117,9 +139,9 @@ private[spark] class FairSchedulableBuilder(val rootPool: Pool, conf: SparkConf)
   }
 
   private def buildFairSchedulerPool(is: InputStream, fileName: String) {
-    val xml = XML.load(is)
-    for (poolNode <- (xml \\ POOLS_PROPERTY)) {
-
+    val xml = XML.load(is) // 输入流转换成xml
+    for (poolNode <- (xml \\ POOLS_PROPERTY)) { // 读取xml的每一个pool节点
+      // 读取<pool>的name属性
       val poolName = (poolNode \ POOL_NAME_PROPERTY).text
 
       val schedulingMode = getSchedulingModeValue(poolNode, poolName,
@@ -128,7 +150,7 @@ private[spark] class FairSchedulableBuilder(val rootPool: Pool, conf: SparkConf)
         DEFAULT_MINIMUM_SHARE, fileName)
       val weight = getIntValue(poolNode, poolName, WEIGHT_PROPERTY,
         DEFAULT_WEIGHT, fileName)
-
+      // 创建子调度池添加到根调度池的调度队列
       rootPool.addSchedulable(new Pool(poolName, schedulingMode, minShare, weight))
 
       logInfo("Created pool: %s, schedulingMode: %s, minShare: %d, weight: %d".format(
@@ -179,19 +201,23 @@ private[spark] class FairSchedulableBuilder(val rootPool: Pool, conf: SparkConf)
         defaultValue
     }
   }
-
+  // 添加TaskSetManager
   override def addTaskSetManager(manager: Schedulable, properties: Properties) {
+    // 获取调度池名称
     val poolName = if (properties != null) {
         properties.getProperty(FAIR_SCHEDULER_PROPERTIES, DEFAULT_POOL_NAME)
       } else {
         DEFAULT_POOL_NAME
       }
+    // 以默认名称调度池作为TaskSetManager的父调度池
     var parentPool = rootPool.getSchedulableByName(poolName)
     if (parentPool == null) {
+      // 如果parentPool为null,创建parentPool
       // we will create a new pool that user has configured in app
       // instead of being defined in xml file
       parentPool = new Pool(poolName, DEFAULT_SCHEDULING_MODE,
         DEFAULT_MINIMUM_SHARE, DEFAULT_WEIGHT)
+      // 放入根调度池
       rootPool.addSchedulable(parentPool)
       logWarning(s"A job was submitted with scheduler pool $poolName, which has not been " +
         "configured. This can happen when the file that pools are read from isn't set, or " +
@@ -199,6 +225,7 @@ private[spark] class FairSchedulableBuilder(val rootPool: Pool, conf: SparkConf)
         s"configuration (schedulingMode: $DEFAULT_SCHEDULING_MODE, " +
         s"minShare: $DEFAULT_MINIMUM_SHARE, weight: $DEFAULT_WEIGHT)")
     }
+    // 把taskSetManager放入父调度池
     parentPool.addSchedulable(manager)
     logInfo("Added task set " + manager.name + " tasks to pool " + poolName)
   }
