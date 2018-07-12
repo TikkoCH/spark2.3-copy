@@ -253,7 +253,9 @@ private[spark] class TaskSchedulerImpl(
   }
 
   /**
-   * Called to indicate that all task attempts (including speculated tasks) associated with the
+   * 调用以指示与给定TaskSetManager关联的所有任务尝试（包括推测任务）已完成，
+    * 因此应清除与TaskSetManager关联的状态。
+    * Called to indicate that all task attempts (including speculated tasks) associated with the
    * given TaskSetManager have completed, so state associated with the TaskSetManager should be
    * cleaned up.
    */

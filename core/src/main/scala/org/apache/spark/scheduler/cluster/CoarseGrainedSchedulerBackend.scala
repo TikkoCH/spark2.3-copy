@@ -33,7 +33,10 @@ import org.apache.spark.scheduler.cluster.CoarseGrainedSchedulerBackend.ENDPOINT
 import org.apache.spark.util.{RpcUtils, SerializableBuffer, ThreadUtils, Utils}
 
 /**
- * A scheduler backend that waits for coarse-grained executors to connect.
+ * 等待CoarseGrainedExecutorBackend进行连接的SchedulerBackend实现.由CoarseGrainedSchedulerBackend
+  * 建立的CoarseGrainedExecutorBackend将会一直存在,真正的Executor线程将在CoarseGrainedExecutorBackend
+  * 进程中执行.
+  * A scheduler backend that waits for coarse-grained executors to connect.
  * This backend holds onto each executor for the duration of the Spark job rather than relinquishing
  * executors whenever a task is done and asking the scheduler to launch a new executor for
  * each new task. Executors may be launched in a variety of ways, such as Mesos tasks for the

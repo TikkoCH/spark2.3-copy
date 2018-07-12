@@ -45,14 +45,16 @@ private case class StopExecutor()
  */
 private[spark] class LocalEndpoint(
     override val rpcEnv: RpcEnv,
-    userClassPath: Seq[URL],
-    scheduler: TaskSchedulerImpl,
-    executorBackend: LocalSchedulerBackend,
-    private val totalCores: Int)
+    userClassPath: Seq[URL],      // 用户指定的classpath
+    scheduler: TaskSchedulerImpl, // Driver中的TaskSchedulerImpl
+    executorBackend: LocalSchedulerBackend, // 与LocalEndpoint相关联的LocalSchedulerBackend
+    private val totalCores: Int)  // cpu核心数,local模式默认为1
   extends ThreadSafeRpcEndpoint with Logging {
-
+  // 空闲CPU内核数.提交Task运行之前,freeCores==totalCores
   private var freeCores = totalCores
-
+  /** local模式下,Driver处于同一JVM进程的Executor的身份标识,由于LocalEndpoint只在local模式下使用
+    * 
+    * */
   val localExecutorId = SparkContext.DRIVER_IDENTIFIER
   val localExecutorHostname = "localhost"
 
@@ -90,7 +92,8 @@ private[spark] class LocalEndpoint(
 }
 
 /**
- * Used when running a local version of Spark where the executor, backend, and master all run in
+ * local模式中调度后端接口.在local模式下,Executor,LocalSchedulerBackend,Driver都运行在一个JVM进程中.
+  * Used when running a local version of Spark where the executor, backend, and master all run in
  * the same JVM. It sits behind a [[TaskSchedulerImpl]] and handles launching tasks on a single
  * Executor (created by the [[LocalSchedulerBackend]]) running locally.
  */

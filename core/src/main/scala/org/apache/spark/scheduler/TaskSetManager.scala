@@ -256,9 +256,12 @@ private[spark] class TaskSetManager(
   /** 当前发现序列化后的task大小超过了100k,次数想将被设置为true,并且答应警告级别的日志*/
   private[scheduler] var emittedTaskSizeWarning = false
 
-  /** Add a task to all the pending-task lists that it should be on. */
+  /**
+    * 把task添加到他应该呆在的所有pengdingtask列表
+    * Add a task to all the pending-task lists that it should be on. */
   private[spark] def addPendingTask(index: Int) {
     for (loc <- tasks(index).preferredLocations) {
+      // 遍历偏好位置,match一下,该放哪放哪....
       loc match {
         case e: ExecutorCacheTaskLocation =>
           pendingTasksForExecutor.getOrElseUpdate(e.executorId, new ArrayBuffer) += index
@@ -314,7 +317,9 @@ private[spark] class TaskSetManager(
   }
 
   /**
-   * Dequeue a pending task from the given list and return its index.
+   * 从指定list中驱逐挂起的任务并且返回其下标.如果list为空返回none.
+    * 该方法也清理已经启动的task.
+    *  Dequeue a pending task from the given list and return its index.
    * Return None if the list is empty.
    * This method also cleans up any tasks in the list that have already
    * been launched, since we want that to happen lazily.
@@ -324,9 +329,11 @@ private[spark] class TaskSetManager(
       host: String,
       list: ArrayBuffer[Int]): Option[Int] = {
     var indexOffset = list.size
+    // 遍历
     while (indexOffset > 0) {
       indexOffset -= 1
       val index = list(indexOffset)
+      // 找到不在黑名单,task的复制运行数==0,task没有成功的索引.
       if (!isTaskBlacklistedOnExecOrNode(index, execId, host)) {
         // This should almost always be list.trimEnd(1) to remove tail
         list.remove(indexOffset)
@@ -441,7 +448,8 @@ private[spark] class TaskSetManager(
   }
 
   /**
-   * Dequeue a pending task for a given node and return its index and locality level.
+   * 根据指定的Host,Executor和本地性级别,找出要执行的Task索引,相应的本地性级别是否进行执行推断.
+    * Dequeue a pending task for a given node and return its index and locality level.
    * Only search for tasks matching the given locality constraint.
    *
    * @return An option containing (task index within the task set, locality, is speculative?)
@@ -450,11 +458,13 @@ private[spark] class TaskSetManager(
     : Option[(Int, TaskLocality.Value, Boolean)] =
   {
     for (index <- dequeueTaskFromList(execId, host, getPendingTasksForExecutor(execId))) {
+      // 选择指定Executor的待处理Task
       return Some((index, TaskLocality.PROCESS_LOCAL, false))
     }
 
     if (TaskLocality.isAllowed(maxLocality, TaskLocality.NODE_LOCAL)) {
       for (index <- dequeueTaskFromList(execId, host, getPendingTasksForHost(host))) {
+        // 选择指定Host的待处理Task
         return Some((index, TaskLocality.NODE_LOCAL, false))
       }
     }
@@ -462,6 +472,7 @@ private[spark] class TaskSetManager(
     if (TaskLocality.isAllowed(maxLocality, TaskLocality.NO_PREF)) {
       // Look for noPref tasks after NODE_LOCAL for minimize cross-rack traffic
       for (index <- dequeueTaskFromList(execId, host, pendingTasksWithNoPrefs)) {
+        // 选择没有本地性偏好的待处理Task
         return Some((index, TaskLocality.PROCESS_LOCAL, false))
       }
     }
@@ -471,23 +482,26 @@ private[spark] class TaskSetManager(
         rack <- sched.getRackForHost(host)
         index <- dequeueTaskFromList(execId, host, getPendingTasksForRack(rack))
       } {
+        // 选择指定Host所在机架的待处理Task
         return Some((index, TaskLocality.RACK_LOCAL, false))
       }
     }
 
     if (TaskLocality.isAllowed(maxLocality, TaskLocality.ANY)) {
       for (index <- dequeueTaskFromList(execId, host, allPendingTasks)) {
+        // 选择任意本地性上的待处理Task
         return Some((index, TaskLocality.ANY, false))
       }
     }
-
+    // 如果已安排所有其他任务，则查找推测任务
     // find a speculative task if all others tasks have been scheduled
     dequeueSpeculativeTask(execId, host, maxLocality).map {
       case (taskIndex, allowedLocality) => (taskIndex, allowedLocality, true)}
   }
 
   /**
-   * Respond to an offer of a single executor from the scheduler by finding a task
+   * 用于给Task按照本地性分配资源.
+    * Respond to an offer of a single executor from the scheduler by finding a task
    *
    * NOTE: this function is either called with a maxLocality which
    * would be adjusted by delay scheduling algorithm or it will be with a special
@@ -512,61 +526,77 @@ private[spark] class TaskSetManager(
       val curTime = clock.getTimeMillis()
 
       var allowedLocality = maxLocality
-
+      // 计算允许的本地性级别
       if (maxLocality != TaskLocality.NO_PREF) {
         allowedLocality = getAllowedLocalityLevel(curTime)
         if (allowedLocality > maxLocality) {
           // We're not allowed to search for farther-away tasks
+          // 我们不允许搜索更远的任务
           allowedLocality = maxLocality
         }
       }
-
+      // 根据指定的Host,Executor和本地性级别,找到合适的Task
       dequeueTask(execId, host, allowedLocality).map { case ((index, taskLocality, speculative)) =>
         // Found a task; do some bookkeeping and return a task description
+        // 根据index找到要执行的Task
         val task = tasks(index)
+        // 生成TaskId
         val taskId = sched.newTaskId()
         // Do various bookkeeping
+        // 增加复制运行数
         copiesRunning(index) += 1
+        // 获取taskattemptId
         val attemptNum = taskAttempts(index).size
+        // 获取taskinfo
         val info = new TaskInfo(taskId, index, attemptNum, curTime,
           execId, host, taskLocality, speculative)
+        // 添加到缓存
         taskInfos(taskId) = info
+        // 添加到尝试缓存
         taskAttempts(index) = info :: taskAttempts(index)
         // Update our locality level for delay scheduling
         // NO_PREF will not affect the variables related to delay scheduling
+        // 获取Task本地性偏好级别
         if (maxLocality != TaskLocality.NO_PREF) {
           currentLocalityIndex = getLocalityIndex(taskLocality)
           lastLaunchTime = curTime
         }
         // Serialize and return the task
+        // 序列化task
         val serializedTask: ByteBuffer = try {
           ser.serialize(task)
         } catch {
           // If the task cannot be serialized, then there's no point to re-attempt the task,
           // as it will always fail. So just abort the whole task-set.
+          // 如果task不能序列化,重新尝试task,如果总是失败,那么就abort吧
           case NonFatal(e) =>
             val msg = s"Failed to serialize task $taskId, not attempting to retry it."
             logError(msg, e)
             abort(s"$msg Exception during serialization: $e")
             throw new TaskNotSerializableException(e)
         }
+        // 如果序列化的字节大小大于警告级别的大小
         if (serializedTask.limit() > TaskSetManager.TASK_SIZE_TO_WARN_KB * 1024 &&
           !emittedTaskSizeWarning) {
+          // 开启warning日志
           emittedTaskSizeWarning = true
           logWarning(s"Stage ${task.stageId} contains a task of very large size " +
             s"(${serializedTask.limit() / 1024} KB). The maximum recommended task size is " +
             s"${TaskSetManager.TASK_SIZE_TO_WARN_KB} KB.")
         }
+        // 添加到正在运行的Task中
         addRunningTask(taskId)
 
         // We used to log the time it takes to serialize the task, but task size is already
         // a good proxy to task serialization time.
         // val timeTaken = clock.getTime() - startTime
+        // 生成task名称
         val taskName = s"task ${info.id} in stage ${taskSet.id}"
         logInfo(s"Starting $taskName (TID $taskId, $host, executor ${info.executorId}, " +
           s"partition ${task.partitionId}, $taskLocality, ${serializedTask.limit()} bytes)")
-
+        // 开始任务,向DAGSchedulerEventProcessLoop中投递BeginEvent事件.
         sched.dagScheduler.taskStarted(task, info)
+        // 创建并返回TaskDescription
         new TaskDescription(
           taskId,
           attemptNum,
@@ -582,10 +612,13 @@ private[spark] class TaskSetManager(
       None
     }
   }
-
+  /**
+    * 当TaskSet可能已经完成的时候进行清理工作
+    * */
   private def maybeFinishTaskSet() {
     if (isZombie && runningTasks == 0) {
       sched.taskSetFinished(this)
+      // 更新黑名单
       if (tasksSuccessful == numTasks) {
         blacklistTracker.foreach(_.updateBlacklistForSuccessfulTaskSet(
           taskSet.stageId,
@@ -619,7 +652,8 @@ private[spark] class TaskSetManager(
       }
       false
     }
-    // 浏览可在每个位置安排执行的任务列表,如果仍有任何需要安排的任务，则返回true.延迟清理已安排的任务。
+    // 浏览可在每个位置安排执行的任务列表,如果仍有任何需要安排的任务，则返回true,
+    // 否则将key于Task集合的映射关系从待处理Task集合中删除,返回false.延迟清理已安排的任务。
     // Walk through the list of tasks that can be scheduled at each location and returns true
     // if there are any tasks that still need to be scheduled. Lazily cleans up tasks that have
     // already been scheduled.
@@ -793,24 +827,29 @@ private[spark] class TaskSetManager(
   }
 
   /**
-   * Marks a task as successful and notifies the DAGScheduler that the task has ended.
+   * 标记一个task已经成功并且通知DAGScheduler任务已经结束.
+    * Marks a task as successful and notifies the DAGScheduler that the task has ended.
    */
   def handleSuccessfulTask(tid: Long, result: DirectTaskResult[_]): Unit = {
     val info = taskInfos(tid)
     val index = info.index
+    // 将taskInfos中缓存的TaskInfo标记为已经完成
     info.markFinished(TaskState.FINISHED, clock.getTimeMillis())
     if (speculationEnabled) {
       successfulTaskDurations.insert(info.duration)
     }
+    // 从正在运行的task中删除task
     removeRunningTask(tid)
-
+    // 杀死同一任务的任何其他尝试（因为现在一次尝试成功完成就不需要了）.
     // Kill any other attempts for the same task (since those are unnecessary now that one
     // attempt completed successfully).
     for (attemptInfo <- taskAttempts(index) if attemptInfo.running) {
       logInfo(s"Killing attempt ${attemptInfo.attemptNumber} for task ${attemptInfo.id} " +
         s"in stage ${taskSet.id} (TID ${attemptInfo.taskId}) on ${attemptInfo.host} " +
         s"as the attempt ${info.attemptNumber} succeeded on ${info.host}")
+      // 同步杀掉尝试任务的缓存
       killedByOtherAttempt(index) = true
+      // 杀掉
       sched.backend.killTask(
         attemptInfo.taskId,
         attemptInfo.executorId,
@@ -818,13 +857,17 @@ private[spark] class TaskSetManager(
         reason = "another attempt succeeded")
     }
     if (!successful(index)) {
+      // 如果successful缓存还未改成成功
+      // 添加成功数量
       tasksSuccessful += 1
       logInfo(s"Finished task ${info.id} in stage ${taskSet.id} (TID ${info.taskId}) in" +
         s" ${info.duration} ms on ${info.host} (executor ${info.executorId})" +
         s" ($tasksSuccessful/$numTasks)")
       // Mark successful and stop if all the tasks have succeeded.
+      // 改为成功
       successful(index) = true
       if (tasksSuccessful == numTasks) {
+        // 改成僵尸状态
         isZombie = true
       }
     } else {
@@ -837,7 +880,13 @@ private[spark] class TaskSetManager(
     // "result.value()" in "TaskResultGetter.enqueueSuccessfulTask" before reaching here.
     // Note: "result.value()" only deserializes the value when it's called at the first time, so
     // here "result.value()" just returns the value and won't block other threads.
+    // 该方法被TaskSchedulerImpl.handleSuccessfulTask调用,其会持有TaskChedulerImp的锁直到退出.
+    // 为了避免SPARK-7655的问题,当我们持有锁时不应该对值反序列化来避免阻塞其他线程.所以我们调用
+    // enqueueSuccessfulTask之前先调用result.value().
+    // 注意:result.value只有在第一次调用的时候反序列化值,所以这里调用不会阻塞其他线程.
+    // 将Task执行结果交给DAGScheduler处理.
     sched.dagScheduler.taskEnded(tasks(index), Success, result.value(), result.accumUpdates, info)
+    // TaskSet可能已经完成的时候进行一些清理工作.
     maybeFinishTaskSet()
   }
 
@@ -956,17 +1005,22 @@ private[spark] class TaskSetManager(
     maybeFinishTaskSet()
   }
 
-  /** If the given task ID is not in the set of running tasks, adds it.
+  /**
+    * 如果指定taskid不在runningtask集合中,添加进去.
+    * If the given task ID is not in the set of running tasks, adds it.
    *
    * Used to keep track of the number of running tasks, for enforcing scheduling policies.
    */
   def addRunningTask(tid: Long) {
     if (runningTasksSet.add(tid) && parent != null) {
+      // 增加父调度池及祖父调度池中记录的当前正在运行的任务数量
       parent.increaseRunningTasks(1)
     }
   }
 
-  /** If the given task ID is in the set of running tasks, removes it. */
+  /**
+    * 如果指定taskId在运行task集合中,删除.
+    * If the given task ID is in the set of running tasks, removes it. */
   def removeRunningTask(tid: Long) {
     if (runningTasksSet.remove(tid) && parent != null) {
       parent.decreaseRunningTasks(1)
@@ -987,38 +1041,53 @@ private[spark] class TaskSetManager(
     sortedTaskSetQueue
   }
 
-  /** Called by TaskScheduler when an executor is lost so we can re-enqueue our tasks */
+  /**
+    * 当Executor失联时会被调用,这样可以重新将task放入队列
+    * Called by TaskScheduler when an executor is lost so we can re-enqueue our tasks */
   override def executorLost(execId: String, host: String, reason: ExecutorLossReason) {
+    // 如果这是一个shuffleMapStage，则重新入队在失败的执行程序上运行的任何任务，
+    // 并且我们不使用可以为shuffle输出提供服务的外部shuffle服务器。
+    // 原因是下一个阶段无法从这个死执行程序中获取数据，因此我们需要在其他执行程序上重新运行这些任务。
     // Re-enqueue any tasks that ran on the failed executor if this is a shuffle map stage,
     // and we are not using an external shuffle server which could serve the shuffle outputs.
     // The reason is the next stage wouldn't be able to fetch the data from this dead executor
     // so we would need to rerun these tasks on other executors.
     if (tasks(0).isInstanceOf[ShuffleMapTask] && !env.blockManager.externalShuffleServiceEnabled
         && !isZombie) {
+      // 找到exeId相等的task
       for ((tid, info) <- taskInfos if info.executorId == execId) {
         val index = taskInfos(tid).index
+        // 如果成功了并且没被其他尝试kill
         if (successful(index) && !killedByOtherAttempt(index)) {
+          // 将此Task标记为未成功,失联了,即使成功了也不能再信任了,标记为未成功吧
           successful(index) = false
+          // task复制运行-1
           copiesRunning(index) -= 1
+          // 成功task-1
           tasksSuccessful -= 1
+          // 添加到待处理
           addPendingTask(index)
           // Tell the DAGScheduler that this task was resubmitted so that it doesn't think our
           // stage finishes when a total of tasks.size tasks finish.
+          // 告知DAGScheduler该任务重新提交,这样当完成tasks.size任务完成时，它不认为我们的阶段结束。
           sched.dagScheduler.taskEnded(
             tasks(index), Resubmitted, null, Seq.empty, info)
         }
       }
     }
     for ((tid, info) <- taskInfos if info.running && info.executorId == execId) {
+      // 获取Executor丢失额度具体原因是否是由应用程序引起的
       val exitCausedByApp: Boolean = reason match {
         case exited: ExecutorExited => exited.exitCausedByApp
         case ExecutorKilled => false
         case _ => true
       }
+      // 对失败的Task进行处理
       handleFailedTask(tid, TaskState.FAILED, ExecutorLostFailure(info.executorId, exitCausedByApp,
         Some(reason.toString)))
     }
     // recalculate valid locality levels and waits when executor is lost
+    // 当executor失联重新计算有效本地性级别并等待
     recomputeLocality()
   }
   /**

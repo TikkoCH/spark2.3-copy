@@ -33,21 +33,37 @@ public interface SparkAppHandle {
    * @since 1.6.0
    */
   enum State {
-    /** The application has not reported back yet. */
+    /**
+     * 应用至今没报告
+     * The application has not reported back yet. */
     UNKNOWN(false),
-    /** The application has connected to the handle. */
+    /**
+     * 应用已经连接
+     * The application has connected to the handle. */
     CONNECTED(false),
-    /** The application has been submitted to the cluster. */
+    /**
+     * 已提交
+     * The application has been submitted to the cluster. */
     SUBMITTED(false),
-    /** The application is running. */
+    /**
+     * 正在运行
+     * The application is running. */
     RUNNING(false),
-    /** The application finished with a successful status. */
+    /**
+     * 已完成
+     * The application finished with a successful status. */
     FINISHED(true),
-    /** The application finished with a failed status. */
+    /**
+     * 已经失败
+     * The application finished with a failed status. */
     FAILED(true),
-    /** The application was killed. */
+    /**
+     * 已经被终止
+     * The application was killed. */
     KILLED(true),
-    /** The Spark Submit JVM exited with a unknown status. */
+    /**
+     * 丢失
+     * The Spark Submit JVM exited with a unknown status. */
     LOST(true);
 
     private final boolean isFinal;
