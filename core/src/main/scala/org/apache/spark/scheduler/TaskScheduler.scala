@@ -22,7 +22,11 @@ import org.apache.spark.storage.BlockManagerId
 import org.apache.spark.util.AccumulatorV2
 
 /**
- * Low-level task scheduler interface, currently implemented exclusively by
+ * 低级别任务调度接口.现有的唯一实现是TaskSchedulerImpl.该接口允许插入不同的TaskScheduler.
+  * 每个TaskScheduler为单个SparkContext规划任务.这些scheduler从每个stage的DAGScheduler获取
+  * 提交给他们的taskset,并负责将这些task发送到集群,运行他们,如果失败会重试,还会推断执行减轻落后任务
+  * 对集群的影响.返回事件报告给DAGScheduler.
+  * Low-level task scheduler interface, currently implemented exclusively by
  * [[org.apache.spark.scheduler.TaskSchedulerImpl]].
  * This interface allows plugging in different task schedulers. Each TaskScheduler schedules tasks
  * for a single SparkContext. These schedulers get sets of tasks submitted to them from the

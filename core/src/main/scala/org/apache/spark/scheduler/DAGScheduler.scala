@@ -276,7 +276,8 @@ class DAGScheduler(
   }
 
   /**
-   * Called by TaskScheduler implementation when an executor fails.
+   * 当Executor失败时,由TaskScheduler实现类调用
+    * Called by TaskScheduler implementation when an executor fails.
    */
   def executorLost(execId: String, reason: ExecutorLossReason): Unit = {
     eventProcessLoop.post(ExecutorLost(execId, reason))

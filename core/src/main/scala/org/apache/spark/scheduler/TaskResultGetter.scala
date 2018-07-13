@@ -62,7 +62,7 @@ private[spark] class TaskResultGetter(sparkEnv: SparkEnv, scheduler: TaskSchedul
       sparkEnv.serializer.newInstance()
     }
   }
-  /** up玫瑰处理执行成功的Task执行结果.*/
+  /** 处理执行成功的Task执行结果.*/
   def enqueueSuccessfulTask(
       taskSetManager: TaskSetManager,
       tid: Long,
@@ -71,6 +71,8 @@ private[spark] class TaskResultGetter(sparkEnv: SparkEnv, scheduler: TaskSchedul
       override def run(): Unit = Utils.logUncaughtExceptions {
         try { // 对Task的执行结果反序列化
           val (result, size) = serializer.get().deserialize[TaskResult[_]](serializedData) match {
+              // 对于ResultTask来说DirectTaskResult的value是执行结果,
+              // 对于ShuffleMapTask来说,结果是任务的状态.
             case directResult: DirectTaskResult[_] =>
               // 如果Task结果类型为DirectTaskResult,说明Task的执行结果保存在DirectTaskResult
 
@@ -126,16 +128,19 @@ private[spark] class TaskResultGetter(sparkEnv: SparkEnv, scheduler: TaskSchedul
           // We need to do this here on the driver because if we did this on the executors then
           // we would have to serialize the result again after updating the size.
           result.accumUpdates = result.accumUpdates.map { a =>
+            // 如果累加器的名称==internal.metrics.resultSize
             if (a.name == Some(InternalAccumulator.RESULT_SIZE)) {
+              // 转换成LongAccumulator
               val acc = a.asInstanceOf[LongAccumulator]
               assert(acc.sum == 0L, "task result size should not have been set on the executors")
+              // 更新累加器
               acc.setValue(size.toLong)
               acc
             } else {
               a
             }
           }
-
+          // 标记一个task已经成功并且通知DAGScheduler任务已经结束.
           scheduler.handleSuccessfulTask(taskSetManager, tid, result)
         } catch {
           case cnf: ClassNotFoundException =>
@@ -149,18 +154,19 @@ private[spark] class TaskResultGetter(sparkEnv: SparkEnv, scheduler: TaskSchedul
       }
     })
   }
-
+  /** 处理失败的Task*/
   def enqueueFailedTask(taskSetManager: TaskSetManager, tid: Long, taskState: TaskState,
     serializedData: ByteBuffer) {
     var reason : TaskFailedReason = UnknownReason
     try {
       getTaskResultExecutor.execute(new Runnable {
         override def run(): Unit = Utils.logUncaughtExceptions {
+          // 获取当前线程classloader或Spark的classloader
           val loader = Utils.getContextOrSparkClassLoader
           try {
             if (serializedData != null && serializedData.limit() > 0) {
               reason = serializer.get().deserialize[TaskFailedReason](
-                serializedData, loader)
+                serializedData, loader)// 对结果进行反序列化,得到失败元婴
             }
           } catch {
             case cnd: ClassNotFoundException =>
@@ -170,6 +176,8 @@ private[spark] class TaskResultGetter(sparkEnv: SparkEnv, scheduler: TaskSchedul
                 "Could not deserialize TaskEndReason: ClassNotFound with classloader " + loader)
             case ex: Exception => // No-op
           } finally {
+            // 如果反序列化是遇到错误,这个线程会结束,仍然通知scheduler任务失败了,避免scheduler
+            // 认为任务还在运行导致挂起.
             // If there's an error while deserializing the TaskEndReason, this Runnable
             // will die. Still tell the scheduler about the task failure, to avoid a hang
             // where the scheduler thinks the task is still running.

@@ -35,7 +35,7 @@ private[spark] trait SchedulerBackend {
   def start(): Unit
 
   def stop(): Unit
-
+  /** 给task分配资源并运行task*/
   def reviveOffers(): Unit
 
   def defaultParallelism(): Int
