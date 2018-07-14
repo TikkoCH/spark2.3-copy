@@ -116,7 +116,8 @@ private[spark] abstract class MemoryManager(
   def acquireUnrollMemory(blockId: BlockId, numBytes: Long, memoryMode: MemoryMode): Boolean
 
   /**
-   * Try to acquire up to `numBytes` of execution memory for the current task and return the
+   * 为当前任务获取指定numbytes执行内存并且返回获取字节数,如果没获取返回0.
+    * Try to acquire up to `numBytes` of execution memory for the current task and return the
    * number of bytes obtained, or 0 if none can be allocated.
    *
    * This call may block until there is enough free memory in some situations, to make sure each
@@ -131,7 +132,8 @@ private[spark] abstract class MemoryManager(
       memoryMode: MemoryMode): Long
 
   /**
-   * Release numBytes of execution memory belonging to the given task.
+   * 释放指定大小的属于给定任务的执行内存
+    * Release numBytes of execution memory belonging to the given task.
    */
   private[memory]
   def releaseExecutionMemory(
@@ -145,7 +147,8 @@ private[spark] abstract class MemoryManager(
   }
 
   /**
-   * Release all memory for the given task and mark it as inactive (e.g. when a task ends).
+   * 释放指定任务尝试所消费的所有执行内存(堆内,堆外)
+    * Release all memory for the given task and mark it as inactive (e.g. when a task ends).
    *
    * @return the number of bytes freed.
    */
@@ -183,7 +186,8 @@ private[spark] abstract class MemoryManager(
   }
 
   /**
-   * Execution memory currently in use, in bytes.
+   * 获取堆上执行内存池与堆外执行内存池已经使用的执行内存之和
+    * Execution memory currently in use, in bytes.
    */
   final def executionMemoryUsed: Long = synchronized {
     onHeapExecutionMemoryPool.memoryUsed + offHeapExecutionMemoryPool.memoryUsed
@@ -198,7 +202,8 @@ private[spark] abstract class MemoryManager(
   }
 
   /**
-   * Returns the execution memory consumption, in bytes, for the given task.
+   * 获取任务尝试在堆上和堆外执行内存池所消费的执行内存之和.
+    * Returns the execution memory consumption, in bytes, for the given task.
    */
   private[memory] def getExecutionMemoryUsageForTask(taskAttemptId: Long): Long = synchronized {
     onHeapExecutionMemoryPool.getMemoryUsageForTask(taskAttemptId) +
@@ -208,7 +213,9 @@ private[spark] abstract class MemoryManager(
   // -- Fields related to Tungsten managed memory -------------------------------------------------
 
   /**
-   * Tracks whether Tungsten memory will be allocated on the JVM heap or off-heap using
+   * 跟踪是否将使用sun.misc.Unsafe在JVM堆或堆外分配Tungsten内存。Tungsten在堆内存模式下,数据存储在
+    * JVM堆上,会选择onHeapExecutionMemoryPool作为内存池,堆外则选择offHeapExecutionMemoryPool作为内存池.
+    * Tracks whether Tungsten memory will be allocated on the JVM heap or off-heap using
    * sun.misc.Unsafe.
    */
   final val tungstenMemoryMode: MemoryMode = {
@@ -224,7 +231,8 @@ private[spark] abstract class MemoryManager(
   }
 
   /**
-   * The default page size, in bytes.
+   * tungsten采用的Page的默认大小,单位字节.可通过spark.buffer.pageSize配置
+    * The default page size, in bytes.
    *
    * If user didn't explicitly set "spark.buffer.pageSize", we figure out the default value
    * by looking at the number of cores available to the process, and the total amount of memory,
@@ -246,7 +254,8 @@ private[spark] abstract class MemoryManager(
   }
 
   /**
-   * Allocates memory for use by Unsafe/Tungsten code.
+   * tungsten采用的内存分配器.
+    * Allocates memory for use by Unsafe/Tungsten code.
    */
   private[memory] final val tungstenMemoryAllocator: MemoryAllocator = {
     tungstenMemoryMode match {

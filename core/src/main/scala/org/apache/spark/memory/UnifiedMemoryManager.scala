@@ -81,6 +81,8 @@ private[spark] class UnifiedMemoryManager private[memory] (
 
   /**
    *
+    * 尝试为当前task获取指定大小的执行内存,并且返回获得的字节数值大小,如果返回0说明没获取到.某些情况下该方法
+    * 会阻塞到能够获取足够的内存.
     * Try to acquire up to `numBytes` of execution memory for the current task and return the
    * number of bytes obtained, or 0 if none can be allocated.
    *
@@ -95,6 +97,7 @@ private[spark] class UnifiedMemoryManager private[memory] (
       memoryMode: MemoryMode): Long = synchronized {
     assertInvariants()
     assert(numBytes >= 0)
+    // 根据内存模式生成(执行内存池,存储内存池,存储内存区域大小,最大内存)的元组.
     val (executionPool, storagePool, storageRegionSize, maxMemory) = memoryMode match {
       case MemoryMode.ON_HEAP => (
         onHeapExecutionMemoryPool,
@@ -109,7 +112,9 @@ private[spark] class UnifiedMemoryManager private[memory] (
     }
 
     /**
-     * Grow the execution pool by evicting cached blocks, thereby shrinking the storage pool.
+     * 通过逐出缓存块来增加执行池，从而缩小存储池。当为task获取内存时,执行内存池可能需要尝试多次.
+      * 每次尝试都必须能够驱逐存储，以防其他任务跳入并在尝试之间缓存大的block。 每次尝试都会调用一次。
+      * Grow the execution pool by evicting cached blocks, thereby shrinking the storage pool.
      *
      * When acquiring memory for a task, the execution pool may need to make multiple
      * attempts. Each attempt must be able to evict storage in case another task jumps in
@@ -117,25 +122,36 @@ private[spark] class UnifiedMemoryManager private[memory] (
      */
     def maybeGrowExecutionPool(extraMemoryNeeded: Long): Unit = {
       if (extraMemoryNeeded > 0) {
+        // 如果额外需要的内存大于0
         // There is not enough free memory in the execution pool, so try to reclaim memory from
         // storage. We can reclaim any free memory from the storage pool. If the storage pool
         // has grown to become larger than `storageRegionSize`, we can evict blocks and reclaim
         // the memory that storage has borrowed from execution.
+        // 存储内存池可回收内存,空闲内存和(内存池大小与堆内存大小之差)的最大值
         val memoryReclaimableFromStorage = math.max(
           storagePool.memoryFree,
           storagePool.poolSize - storageRegionSize)
+        // 如果可回收内存>0
         if (memoryReclaimableFromStorage > 0) {
           // Only reclaim as much space as is necessary and available:
+          // 释放 额外需要内存和可回收内存的最小值
           val spaceToReclaim = storagePool.freeSpaceToShrinkPool(
             math.min(extraMemoryNeeded, memoryReclaimableFromStorage))
+          // 存储内存池缩小
           storagePool.decrementPoolSize(spaceToReclaim)
+          // 执行内存池增大
           executionPool.incrementPoolSize(spaceToReclaim)
         }
       }
     }
 
     /**
-     * The size the execution pool would have after evicting storage memory.
+     * 驱逐存储内存后执行池的大小。执行内存池将此数量均匀地划分为活动任务，以限制每个任务的执行内存分配。
+      * 保持这个大于执行池大小是很重要的，这不考虑可以通过驱逐存储而释放的潜在内存。
+      * 否则我们可能会导致SPARK-12155的问题。
+      * 另外，这个数量应该保持在“maxMemory”以下，以便在任务中执行内存分配的公平性进行仲裁。
+      * 否则，任务可能占用超过其公平份额的执行内存，错误地认为其他任务可以获得不能存储的内存部分而被驱逐
+      * The size the execution pool would have after evicting storage memory.
      *
      * The execution memory pool divides this quantity among the active tasks evenly to cap
      * the execution memory allocation for each task. It is important to keep this greater
@@ -148,9 +164,10 @@ private[spark] class UnifiedMemoryManager private[memory] (
      * the portion of storage memory that cannot be evicted.
      */
     def computeMaxExecutionPoolSize(): Long = {
+      // 最大内存-使用内存和存储内存大小的最小值
       maxMemory - math.min(storagePool.memoryUsed, storageRegionSize)
     }
-
+    // 获取内存
     executionPool.acquireMemory(
       numBytes, taskAttemptId, maybeGrowExecutionPool, () => computeMaxExecutionPoolSize)
   }

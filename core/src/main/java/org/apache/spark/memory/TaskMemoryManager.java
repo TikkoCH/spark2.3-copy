@@ -36,6 +36,9 @@ import org.apache.spark.unsafe.memory.MemoryBlock;
 import org.apache.spark.util.Utils;
 
 /**
+ * 用于管理单个任务尝试的内存分配与释放.TaskMemoryManager实际上依赖MemoryManager提供的内存管理能力,
+ * 多个TaskMemoryManager将共享memoryManager所管理的内存.一次任务尝试有很多组件需要使用内存,这些组件
+ * 都借助于TaskMemoryManager提供的服务对实际的物理内存进行消费,他们统称为内存消费者.
  * Manages the memory allocated by an individual task.
  * <p>
  * Most of the complexity in this class deals with encoding of off-heap addresses into 64-bit longs.
@@ -60,17 +63,25 @@ public class TaskMemoryManager {
 
   private static final Logger logger = LoggerFactory.getLogger(TaskMemoryManager.class);
 
-  /** The number of bits used to address the page table. */
+  /**
+   * 用于寻址Page的位数.在64位长整形中将使用高位的13位存储页号
+   * The number of bits used to address the page table. */
   private static final int PAGE_NUMBER_BITS = 13;
 
-  /** The number of bits used to encode offsets in data pages. */
+  /**
+   * 用于保存编码后的偏移量的位数.64位长整形中使用低位的51位存储偏移量
+   * The number of bits used to encode offsets in data pages. */
   @VisibleForTesting
   static final int OFFSET_BITS = 64 - PAGE_NUMBER_BITS;  // 51
 
-  /** The number of entries in the page table. */
+  /**
+   * Page表中的Page数量.1左移13位,8192
+   * The number of entries in the page table. */
   private static final int PAGE_TABLE_SIZE = 1 << PAGE_NUMBER_BITS;
 
   /**
+   * 最大的page大小.(2^32-1)*8.原则上来讲,最大可分配page大小是2pb多.堆上内存分配器的最大page大小被可存储
+   * 进Long数组中数据的总量2^32-1限制了,所以,最大值是2^32-1.
    * Maximum supported data page size (in bytes). In principle, the maximum addressable page size is
    * (1L &lt;&lt; OFFSET_BITS) bytes, which is 2+ petabytes. However, the on-heap allocator's
    * maximum page size is limited by the maximum amount of data that can be stored in a long[]
@@ -79,10 +90,17 @@ public class TaskMemoryManager {
    */
   public static final long MAXIMUM_PAGE_SIZE_BYTES = ((1L << 31) - 1) * 8L;
 
-  /** Bit mask for the lower 51 bits of a long. */
+  /**
+   * 长整型的低51位的位掩码
+   * Bit mask for the lower 51 bits of a long. */
   private static final long MASK_LONG_LOWER_51_BITS = 0x7FFFFFFFFFFFFL;
 
   /**
+   * Page表.市纪委Page的数组,数组长度为PAGE_TABLE_SIZE.
+   * 与操作系统的页表类似，此数组将页码映射到基础对象指针，允许我们在哈希表的内部64位地址表示
+   * 和baseObject +偏移表示之间进行转换，我们使用它来支持堆内和堆外地址。 使用堆外分配器时，
+   * 此映射中的每个条目都将为“null”。 使用堆内分配器时，此映射中的条目将指向页面的基础对象。
+   * 在分配新数据页时，会将条目添加到此映射中。
    * Similar to an operating system's page table, this array maps page numbers into base object
    * pointers, allowing us to translate between the hashtable's internal 64-bit address
    * representation and the baseObject+offset representation which we use to support both in- and
@@ -93,15 +111,19 @@ public class TaskMemoryManager {
   private final MemoryBlock[] pageTable = new MemoryBlock[PAGE_TABLE_SIZE];
 
   /**
+   * 用于跟踪空闲Page的BitSet
    * Bitmap for tracking free pages.
    */
   private final BitSet allocatedPages = new BitSet(PAGE_TABLE_SIZE);
 
   private final MemoryManager memoryManager;
-
+  /** TaskMemoryManager锁管理任务尝试的id*/
   private final long taskAttemptId;
 
   /**
+   * Tugsten内存模式,TaskMemoryManager的getTungstenMemoryMode方法专门用于返回tungstenMemoryMode的值.
+   * 跟踪我们是在堆中还是在堆外。 对于堆外，我们将大多数这些方法短路而不进行任何屏蔽或查找。
+   * 由于这个分支应该由JIT很好地预测，所以这个额外的间接/抽象层希望不应该太昂贵。
    * Tracks whether we're in-heap or off-heap. For off-heap, we short-circuit most of these methods
    * without doing any masking or lookups. Since this branching should be well-predicted by the JIT,
    * this extra layer of indirection / abstraction hopefully shouldn't be too expensive.
@@ -109,12 +131,14 @@ public class TaskMemoryManager {
   final MemoryMode tungstenMemoryMode;
 
   /**
+   * 用于跟踪可溢出的MemoryConsumer
    * Tracks spillable memory consumers.
    */
   @GuardedBy("this")
   private final HashSet<MemoryConsumer> consumers;
 
   /**
+   * 任务尝试已经获得但并未使用的内存大小
    * The amount of memory that is acquired but not used.
    */
   private volatile long acquiredButNotUsed = 0L;
@@ -130,6 +154,7 @@ public class TaskMemoryManager {
   }
 
   /**
+   * 获取内存消费者指定大小的内存.当Task没有足够内存时,调用MemoryConsumer的spill方法释放内存.
    * Acquire N bytes of memory for a consumer. If there is no enough memory, it will call
    * spill() of consumers to release more memory.
    *
@@ -138,17 +163,25 @@ public class TaskMemoryManager {
   public long acquireExecutionMemory(long required, MemoryConsumer consumer) {
     assert(required >= 0);
     assert(consumer != null);
+    // 内存消费者的模式
     MemoryMode mode = consumer.getMode();
+    // 如果我们在堆外分配Tungsten页面并在此处接收分配堆内存的请求，那么溢出可能没有意义，
+    // 因为这样只能最终释放堆外内存。 但是，这可能会发生变化，因此，
+    // 如果我们在进行更改时忘记稍后撤消它，现在进行此优化可能会有风险。
     // If we are allocating Tungsten pages off-heap and receive a request to allocate on-heap
     // memory here, then it may not make sense to spill since that would only end up freeing
     // off-heap memory. This is subject to change, though, so it may be risky to make this
     // optimization now in case we forget to undo it late when making changes.
     synchronized (this) {
+      // 为当前的任务尝试按照指定的存储模式获取指定大小的内存
       long got = memoryManager.acquireExecutionMemory(required, taskAttemptId, mode);
-
+      // 首先从消费者中释放内存,然后我们可以减少spill的频率,避免有太多溢出文件.
       // Try to release memory from other consumers first, then we can reduce the frequency of
       // spilling, avoid to have too many spilled files.
+      // 如果获得的小于需求的
       if (got < required) {
+        // 调用消费者上的spill来释放内存,就是写到磁盘上.根据消费者内存的使用排序.
+        // 因此，我们避免溢出最后几次溢出的同一消费者，并且重新溢出它将产生许多小的溢出文件。
         // Call spill() on other consumers to release memory
         // Sort the consumers according their memory usage. So we avoid spilling the same consumer
         // which is just spilled in last few times and re-spilling on it will produce many small
@@ -162,26 +195,38 @@ public class TaskMemoryManager {
             list.add(c);
           }
         }
+        // 遍历排完序的消费者
         while (!sortedConsumers.isEmpty()) {
+          // 使用最少的内存而不是剩余的所需内存来获取consumer.
           // Get the consumer using the least memory more than the remaining required memory.
+          // ceilingEntry返回大于等于指定键的最近的一个键,没有返回null
           Map.Entry<Long, List<MemoryConsumer>> currentEntry =
-            sortedConsumers.ceilingEntry(required - got);
+            sortedConsumers.ceilingEntry(required - got);  // 需要的-已获得=还差多少
+          // 没有消费者已经使用的内存比保留需要的内存
           // No consumer has used memory more than the remaining required memory.
           // Get the consumer of largest used memory.
           if (currentEntry == null) {
+            // 如果为null,说明没有获取比required - got还大的值,那就取最后一个,那是最大的
             currentEntry = sortedConsumers.lastEntry();
           }
+          // 拿到MemoryConsumer的列表
           List<MemoryConsumer> cList = currentEntry.getValue();
+          // 删除并获得最后一个MemoryConsumer
           MemoryConsumer c = cList.remove(cList.size() - 1);
           if (cList.isEmpty()) {
+            // 如果cList已经为空了,从排完序的sortedConsumers删除该key
             sortedConsumers.remove(currentEntry.getKey());
           }
           try {
+            // 对上面拿到的MemoryConsumer溢出到磁盘
             long released = c.spill(required - got, consumer);
+            // 如果释放的内存大于0
             if (released > 0) {
               logger.debug("Task {} released {} from {} for {}", taskAttemptId,
                 Utils.bytesToString(released), c, consumer);
+              // got(已获得)就变大了,获取执行内存
               got += memoryManager.acquireExecutionMemory(required - got, taskAttemptId, mode);
+              // 如果获取大于需求,那可以跳出循环了,不然继续遍历sortedConsumers
               if (got >= required) {
                 break;
               }
@@ -200,11 +245,15 @@ public class TaskMemoryManager {
 
       // call spill() on itself
       if (got < required) {
+        // 到这说明已经遍历完了sortedConsumers,说明其中的元素都被spill了,
+        // 并且没有got >= required,所以也没break循环.说明获取的空间还不够
         try {
+          // 尝试对传进来的消费者进行溢出到磁盘,释放内存
           long released = consumer.spill(required - got, consumer);
           if (released > 0) {
             logger.debug("Task {} released {} from itself ({})", taskAttemptId,
               Utils.bytesToString(released), consumer);
+            // 然后更新已获得的内存
             got += memoryManager.acquireExecutionMemory(required - got, taskAttemptId, mode);
           }
         } catch (ClosedByInterruptException e) {
@@ -217,22 +266,28 @@ public class TaskMemoryManager {
             + e.getMessage());
         }
       }
-
+      // 总的来说所有的MemoryConsumer都是我们的可压榨对象,不断跟踪不断在需要时候进行压榨.
+      // 整个方法就是不断压榨MemoryConsumer的过程.
+      // 缓存中添加consumer
       consumers.add(consumer);
       logger.debug("Task {} acquired {} for {}", taskAttemptId, Utils.bytesToString(got), consumer);
+      // 返回已获得内存
       return got;
     }
   }
 
   /**
+   * 为内存消费者释放指定大小的内存,单位byte
    * Release N bytes of execution memory for a MemoryConsumer.
    */
   public void releaseExecutionMemory(long size, MemoryConsumer consumer) {
     logger.debug("Task {} release {} from {}", taskAttemptId, Utils.bytesToString(size), consumer);
+    // 实际调用memoryManager的releaseExecutionMemory
     memoryManager.releaseExecutionMemory(size, taskAttemptId, consumer.getMode());
   }
 
   /**
+   * 所有consumer的内存使用情况
    * Dump the memory usage of all consumers.
    */
   public void showMemoryUsage() {
