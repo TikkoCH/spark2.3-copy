@@ -52,9 +52,9 @@ import org.apache.spark.util._
  */
 private[spark] abstract class Task[T](
     val stageId: Int,
-    val stageAttemptId: Int,
-    val partitionId: Int,
-    @transient var localProperties: Properties = new Properties,
+    val stageAttemptId: Int,  // Stage的尝试id
+    val partitionId: Int,     // 分区Id
+    @transient var localProperties: Properties = new Properties,    // Task执行属性信息
     // The default value is only used in tests.
     serializedTaskMetrics: Array[Byte] =
       SparkEnv.get.closureSerializer.newInstance().serialize(TaskMetrics.registered).array(),
@@ -76,7 +76,8 @@ private[spark] abstract class Task[T](
       taskAttemptId: Long,
       attemptNumber: Int,
       metricsSystem: MetricsSystem): T = {
-    SparkEnv.get.blockManager.registerTask(taskAttemptId)
+    SparkEnv.get.blockManager.registerTask(taskAttemptId) // 任务尝试注册到BlockInfoManager
+    // 创建任务尝试上下文
     context = new TaskContextImpl(
       stageId,
       stageAttemptId, // stageAttemptId and stageAttemptNumber are semantically equal
@@ -87,13 +88,14 @@ private[spark] abstract class Task[T](
       localProperties,
       metricsSystem,
       metrics)
+    // 将任务尝试上下文保存到ThreadLocal中
     TaskContext.setTaskContext(context)
     taskThread = Thread.currentThread()
-
+    // 如果任务尝试已经被kill,调用kill方法
     if (_reasonIfKilled != null) {
       kill(interruptThread = false, _reasonIfKilled)
     }
-
+    // 创建调用者上下文
     new CallerContext(
       "TASK",
       SparkEnv.get.conf.get(APP_CALLER_CONTEXT),
@@ -106,6 +108,7 @@ private[spark] abstract class Task[T](
       Option(attemptNumber)).setCurrentContext()
 
     try {
+      // 调用子类实现的runTask方法运行任务尝试
       runTask(context)
     } catch {
       case e: Throwable =>
@@ -122,10 +125,12 @@ private[spark] abstract class Task[T](
       try {
         // Call the task completion callbacks. If "markTaskCompleted" is called twice, the second
         // one is no-op.
+        // 调用markTaskCompleted,如果调用两次没关系,第二次不操作
         context.markTaskCompleted(None)
       } finally {
         try {
           Utils.tryLogNonFatalError {
+            // 释放内存
             // Release memory used by this thread for unrolling blocks
             SparkEnv.get.blockManager.memoryStore.releaseUnrollMemoryForThisTask(MemoryMode.ON_HEAP)
             SparkEnv.get.blockManager.memoryStore.releaseUnrollMemoryForThisTask(
@@ -141,7 +146,7 @@ private[spark] abstract class Task[T](
         } finally {
           // Though we unset the ThreadLocal here, the context member variable itself is still
           // queried directly in the TaskRunner to check for FetchFailedExceptions.
-          TaskContext.unset()
+          TaskContext.unset() // 移除ThreadLocal中的TaskContextImpl
         }
       }
     }
@@ -158,23 +163,29 @@ private[spark] abstract class Task[T](
   def preferredLocations: Seq[TaskLocation] = Nil
 
   // Map output tracker epoch. Will be set by TaskSetManager.
+  // MapOutputTracker的epoch,由TaskSetManager设置
   var epoch: Long = -1
 
   // Task context, to be initialized in run().
+  /** Task执行的上下文信息,TaskContextImpl.将被set到ThreadLocal中,保证线程安全*/
   @transient var context: TaskContextImpl = _
 
   // The actual Thread on which the task is running, if any. Initialized in run().
+  /** 运行任务尝试的线程*/
   @volatile @transient private var taskThread: Thread = _
 
   // If non-null, this task has been killed and the reason is as specified. This is used in case
   // context is not yet initialized when kill() is invoked.
+  /** kill的原因*/
   @volatile @transient private var _reasonIfKilled: String = null
-
+  /** 对RDD进行反序列化所花费的时间*/
   protected var _executorDeserializeTime: Long = 0
+  /** 对RDD进行反序列化所花费的cpu时间*/
   protected var _executorDeserializeCpuTime: Long = 0
 
   /**
-   * If defined, this task has been killed and this option contains the reason.
+   * _reasonIfKilled的get方法
+    * If defined, this task has been killed and this option contains the reason.
    */
   def reasonIfKilled: Option[String] = Option(_reasonIfKilled)
 
@@ -201,7 +212,9 @@ private[spark] abstract class Task[T](
   }
 
   /**
-   * Kills a task by setting the interrupted flag to true. This relies on the upper level Spark
+   * 如果interruptThread为false,那么只会讲Task和TaskContextImpl标记为kull,如果为true,会利用java线程的
+    * 中断机制中断线程.
+    * Kills a task by setting the interrupted flag to true. This relies on the upper level Spark
    * code and user code to properly handle the flag. This function should be idempotent so it can
    * be called multiple times.
    * If interruptThread is true, we will also call Thread.interrupt() on the Task's executor thread.

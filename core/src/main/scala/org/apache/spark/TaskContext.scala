@@ -27,16 +27,21 @@ import org.apache.spark.metrics.source.Source
 import org.apache.spark.shuffle.FetchFailedException
 import org.apache.spark.util.{AccumulatorV2, TaskCompletionListener, TaskFailureListener}
 
-
+/** TaskContext半生对象提供了将TaskContext保存到ThreadLocal中,用于保证每个task尝试线程的TaskContextImpl
+  * 的线程安全.
+  * */
 object TaskContext {
   /**
-   * Return the currently active TaskContext. This can be called inside of
+   * 从ThreadLocal中获取当前任务尝试的TaskContextImpl
+    * Return the currently active TaskContext. This can be called inside of
    * user functions to access contextual information about running tasks.
    */
   def get(): TaskContext = taskContext.get
 
   /**
-   * Returns the partition id of currently active TaskContext. It will return 0
+   * 从ThreadLocal中获取当前任务尝试线程的TaskContextImpl,然后调用TaskContextImpl的
+    * partitionId方法
+    * Returns the partition id of currently active TaskContext. It will return 0
    * if there is no active TaskContext for cases like local execution.
    */
   def getPartitionId(): Int = {
@@ -53,17 +58,22 @@ object TaskContext {
   // Note: protected[spark] instead of private[spark] to prevent the following two from
   // showing up in JavaDoc.
   /**
-   * Set the thread local TaskContext. Internal to Spark.
+   * 将TaskContextImpl放入ThreadLocal
+    * Set the thread local TaskContext. Internal to Spark.
    */
   protected[spark] def setTaskContext(tc: TaskContext): Unit = taskContext.set(tc)
 
   /**
-   * Unset the thread local TaskContext. Internal to Spark.
+   * 移除ThreadLocal中保存的当前任务尝试线程的TaskContextimpl
+    *
+    * Unset the thread local TaskContext. Internal to Spark.
    */
   protected[spark] def unset(): Unit = taskContext.remove()
 
   /**
-   * An empty task context that does not represent an actual task.  This is only used in tests.
+   * 创建一个没有任何实际意义的TaskContextImpl
+    * An empty task context that does not represent an actual task.  This is only used in tests.
+    *
    */
   private[spark] def empty(): TaskContextImpl = {
     new TaskContextImpl(0, 0, 0, 0, 0, null, new Properties, null)

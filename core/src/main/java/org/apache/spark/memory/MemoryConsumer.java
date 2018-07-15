@@ -30,8 +30,11 @@ import org.apache.spark.unsafe.memory.MemoryBlock;
 public abstract class MemoryConsumer {
 
   protected final TaskMemoryManager taskMemoryManager;
+  /** MemoryConsumer要消费的Page大小*/
   private final long pageSize;
+  /** 内存模式*/
   private final MemoryMode mode;
+  /** 当前消费者已经使用的执行内存大小*/
   protected long used;
 
   protected MemoryConsumer(TaskMemoryManager taskMemoryManager, long pageSize, MemoryMode mode) {
@@ -59,6 +62,8 @@ public abstract class MemoryConsumer {
   }
 
   /**
+   * 当taskAttempt没有足够内存可用时,TaskMemoryManager调用此方法把一些数据溢出到磁盘,
+   * 释放内存.
    * Force spill during building.
    */
   public void spill() throws IOException {
@@ -66,6 +71,7 @@ public abstract class MemoryConsumer {
   }
 
   /**
+   * 将一些数据溢出到磁盘上来释放内存,当内存不足时会被TaskMemoryManager调用.该方法具体由子类实现.
    * Spill some data to disk to release memory, which will be called by TaskMemoryManager
    * when there is not enough memory for the task.
    *
@@ -83,6 +89,8 @@ public abstract class MemoryConsumer {
   public abstract long spill(long size, MemoryConsumer trigger) throws IOException;
 
   /**
+   * 用于分配指定大小的长整型数组.如果Spark没有足够的分配内存会抛出OutOfMemoryError,如果数组对于单个page
+   * 来说过大,会抛出TooLargePageException.
    * Allocates a LongArray of `size`. Note that this method may throw `OutOfMemoryError` if Spark
    * doesn't have enough memory for this allocation, or throw `TooLargePageException` if this
    * `LongArray` is too large to fit in a single page. The caller side should take care of these
@@ -92,16 +100,20 @@ public abstract class MemoryConsumer {
    * @throws TooLargePageException
    */
   public LongArray allocateArray(long size) {
+    // 计算所需page大小
     long required = size * 8L;
+    // 分配指定大小的MemoryBlock
     MemoryBlock page = taskMemoryManager.allocatePage(required, this);
     if (page == null || page.size() < required) {
       throwOom(page, required);
     }
+    // 逻辑上修改已使用内存
     used += required;
     return new LongArray(page);
   }
 
   /**
+   * 用于释放长整型数组
    * Frees a LongArray.
    */
   public void freeArray(LongArray array) {
@@ -123,14 +135,17 @@ public abstract class MemoryConsumer {
   }
 
   /**
+   * 释放MemoryBlock
    * Free a memory block.
    */
   protected void freePage(MemoryBlock page) {
+    // 逻辑更新已使用内存
     used -= page.size();
     taskMemoryManager.freePage(page, this);
   }
 
   /**
+   * 获取指定大小的内存,单位byte
    * Allocates memory of `size`.
    */
   public long acquireMemory(long size) {
@@ -140,6 +155,7 @@ public abstract class MemoryConsumer {
   }
 
   /**
+   * 释放指定字节内存
    * Release N bytes of memory.
    */
   public void freeMemory(long size) {

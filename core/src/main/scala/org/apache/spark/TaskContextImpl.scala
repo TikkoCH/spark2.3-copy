@@ -16,7 +16,7 @@
  */
 
 package org.apache.spark
-
+// scalastyle:off
 import java.util.Properties
 import javax.annotation.concurrent.GuardedBy
 
@@ -31,7 +31,10 @@ import org.apache.spark.shuffle.FetchFailedException
 import org.apache.spark.util._
 
 /**
- * A [[TaskContext]] implementation.
+ * TaskContext实现类.有一个小的线程安全的注意事项,interrupted和fetchFailed字段是volatile修饰的,
+  * 这确保了对其的修改其他线程可见.complete和failed标志和他们的回调以context实例作为锁来保护.
+  *
+  * A [[TaskContext]] implementation.
  *
  * A small note on thread safety. The interrupted & fetchFailed fields are volatile, this makes
  * sure that updates are always visible across threads. The complete & failed flags and their
@@ -41,41 +44,50 @@ import org.apache.spark.util._
  * `TaskMetrics` & `MetricsSystem` objects are not thread safe.
  */
 private[spark] class TaskContextImpl(
-    override val stageId: Int,
-    override val stageAttemptNumber: Int,
-    override val partitionId: Int,
-    override val taskAttemptId: Long,
-    override val attemptNumber: Int,
-    override val taskMemoryManager: TaskMemoryManager,
-    localProperties: Properties,
-    @transient private val metricsSystem: MetricsSystem,
+    override val stageId: Int,  // stage的id
+    override val stageAttemptNumber: Int, // stage的尝试number
+    override val partitionId: Int,  // 分区id
+    override val taskAttemptId: Long, // 任务尝试id
+    override val attemptNumber: Int,  // 尝试号码
+    override val taskMemoryManager: TaskMemoryManager, // task的内存管理
+    localProperties: Properties,  // 配置属性
+    @transient private val metricsSystem: MetricsSystem, // 度量系统
     // The default value is only used in tests.
-    override val taskMetrics: TaskMetrics = TaskMetrics.empty)
+    override val taskMetrics: TaskMetrics = TaskMetrics.empty) // 任务的度量
   extends TaskContext
   with Logging {
 
-  /** List of callback functions to execute when the task completes. */
+  /**
+    * 保存任务执行完成后需要的回调TaskCompletionListener数组
+    * List of callback functions to execute when the task completes. */
   @transient private val onCompleteCallbacks = new ArrayBuffer[TaskCompletionListener]
 
-  /** List of callback functions to execute when the task fails. */
+  /**
+    * 保存任务执行失败后需要回调的TaskFailureListener数组
+    * List of callback functions to execute when the task fails. */
   @transient private val onFailureCallbacks = new ArrayBuffer[TaskFailureListener]
 
   // If defined, the corresponding task has been killed and this option contains the reason.
+  /** 如果有值,对应的task已经被杀掉并且Option中包含原因*/
   @volatile private var reasonIfKilled: Option[String] = None
 
   // Whether the task has completed.
+  /** 任务是否完成*/
   private var completed: Boolean = false
 
   // Whether the task has failed.
+  /** task是否失败了*/
   private var failed: Boolean = false
 
   // Throwable that caused the task to fail
+  /** 任务失败的异常*/
   private var failure: Throwable = _
 
   // If there was a fetch failure in the task, we store it here, to make sure user-code doesn't
   // hide the exception.  See SPARK-19276
+  /** 如果task有fetch(获取数据块)异常,我们将其存在这个成员中,确保用户代码没有隐藏异常*/
   @volatile private var _fetchFailedException: Option[FetchFailedException] = None
-
+  // 添加任务完成的监听器
   @GuardedBy("this")
   override def addTaskCompletionListener(listener: TaskCompletionListener)
       : this.type = synchronized {
@@ -86,7 +98,7 @@ private[spark] class TaskContextImpl(
     }
     this
   }
-
+  // 添加任务失败的监听器
   @GuardedBy("this")
   override def addTaskFailureListener(listener: TaskFailureListener)
       : this.type = synchronized {
@@ -98,44 +110,51 @@ private[spark] class TaskContextImpl(
     this
   }
 
-  /** Marks the task as failed and triggers the failure listeners. */
+  /**
+    * 将任务标记为失败并且触发失败监听器
+    * Marks the task as failed and triggers the failure listeners. */
   @GuardedBy("this")
   private[spark] def markTaskFailed(error: Throwable): Unit = synchronized {
-    if (failed) return
-    failed = true
-    failure = error
+    if (failed) return   // 如果已经标记了失败直接返回
+    failed = true   // 标记失败
+    failure = error // 失败异常
     invokeListeners(onFailureCallbacks, "TaskFailureListener", Option(error)) {
       _.onTaskFailure(this, error)
     }
   }
 
-  /** Marks the task as completed and triggers the completion listeners. */
+  /**
+    * 标记task执行完成并且触发完成监听器.
+    * Marks the task as completed and triggers the completion listeners. */
   @GuardedBy("this")
   private[spark] def markTaskCompleted(error: Option[Throwable]): Unit = synchronized {
-    if (completed) return
-    completed = true
+    if (completed) return  // 如果其他线程已经标记了完成,直接返回
+    completed = true      // 标记完成
     invokeListeners(onCompleteCallbacks, "TaskCompletionListener", error) {
       _.onTaskCompletion(this)
     }
   }
-
+  /** 对于listeners中的每个listner,执行偏函数callback方法*/
   private def invokeListeners[T](
-      listeners: Seq[T],
-      name: String,
-      error: Option[Throwable])(
+      listeners: Seq[T],    // 监听器列表
+      name: String,         // 名称
+      error: Option[Throwable])( // 错误
       callback: T => Unit): Unit = {
     val errorMsgs = new ArrayBuffer[String](2)
     // Process callbacks in the reverse order of registration
+    // 反向排序,对其中每个TaskFailureListener,调用传进来的callback方法
     listeners.reverse.foreach { listener =>
       try {
         callback(listener)
       } catch {
         case e: Throwable =>
+          // 将每个异常添加到数组中
           errorMsgs += e.getMessage
           logError(s"Error in $name", e)
       }
     }
     if (errorMsgs.nonEmpty) {
+      // 如果异常数组不为空,抛出异常
       throw new TaskCompletionListenerException(errorMsgs, error)
     }
   }

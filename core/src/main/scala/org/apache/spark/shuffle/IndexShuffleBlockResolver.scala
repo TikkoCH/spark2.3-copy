@@ -31,7 +31,11 @@ import org.apache.spark.storage._
 import org.apache.spark.util.Utils
 
 /**
- * Create and maintain the shuffle blocks' mapping between logic block and physical file location.
+  * 创建和维护shuffle块在逻辑块和物理文件位置之间的映射。 来自相同map任务的ShuffleBlock数据存储在
+  * 单个合并数据文件中。数据文件中数据block的偏移量存储在单独的索引文件中。
+  *  我们使用shuffle数据的名称shuffleBlockId，其中reduce ID设置为0，并将“.data”添加为数据文件的文件名后缀
+  * ，并将“.index”添加为索引文件的文件名后缀。
+  * Create and maintain the shuffle blocks' mapping between logic block and physical file location.
  * Data of shuffle blocks from the same map task are stored in a single consolidated data file.
  * The offsets of the data blocks in the data file are stored in a separate index file.
  *
@@ -46,33 +50,38 @@ private[spark] class IndexShuffleBlockResolver(
     _blockManager: BlockManager = null)
   extends ShuffleBlockResolver
   with Logging {
-
+  // SparkEnv中的组件BlockManager
   private lazy val blockManager = Option(_blockManager).getOrElse(SparkEnv.get.blockManager)
-
+  // shuffle相关的TransportConf
   private val transportConf = SparkTransportConf.fromSparkConf(conf, "shuffle")
-
+  /**
+    * 用于获取Shuffle数据文件,实际是blockManager.diskBlockManager.getFile
+    * */
   def getDataFile(shuffleId: Int, mapId: Int): File = {
     blockManager.diskBlockManager.getFile(ShuffleDataBlockId(shuffleId, mapId, NOOP_REDUCE_ID))
   }
-
+  /**
+    * 用于获取Shuffle索引文件.
+    * */
   private def getIndexFile(shuffleId: Int, mapId: Int): File = {
     blockManager.diskBlockManager.getFile(ShuffleIndexBlockId(shuffleId, mapId, NOOP_REDUCE_ID))
   }
 
   /**
-   * Remove data file and index file that contain the output data from one map.
+   * 删除Shuffle过程中包含指定map任务输出数据的shuffle数据文件和索引文件
+    * Remove data file and index file that contain the output data from one map.
    */
   def removeDataByMap(shuffleId: Int, mapId: Int): Unit = {
     var file = getDataFile(shuffleId, mapId)
     if (file.exists()) {
-      if (!file.delete()) {
+      if (!file.delete()) {// 删除数据文件
         logWarning(s"Error deleting data ${file.getPath()}")
       }
     }
-
+    // 获取指定Shuffle中指定map任务输出的索引文件
     file = getIndexFile(shuffleId, mapId)
     if (file.exists()) {
-      if (!file.delete()) {
+      if (!file.delete()) { // 删除索引文件
         logWarning(s"Error deleting index ${file.getPath()}")
       }
     }
@@ -124,7 +133,8 @@ private[spark] class IndexShuffleBlockResolver(
   }
 
   /**
-   * Write an index file with the offsets of each block, plus a final offset at the end for the
+   * 将每个Block的偏移量写入索引文件,并在最后增加一个表示输出文件末尾的偏移量
+    * Write an index file with the offsets of each block, plus a final offset at the end for the
    * end of the output file. This will be used by getBlockData to figure out where each block
    * begins and ends.
    *
@@ -138,7 +148,9 @@ private[spark] class IndexShuffleBlockResolver(
       mapId: Int,
       lengths: Array[Long],
       dataTmp: File): Unit = {
+    // 获取指定shuffle中指定map任务输出的索引文件
     val indexFile = getIndexFile(shuffleId, mapId)
+    // 获取索引文件路径
     val indexTmp = Utils.tempFileWith(indexFile)
     try {
       val out = new DataOutputStream(new BufferedOutputStream(new FileOutputStream(indexTmp)))
@@ -146,6 +158,7 @@ private[spark] class IndexShuffleBlockResolver(
         // We take in lengths of each block, need to convert it to offsets.
         var offset = 0L
         out.writeLong(offset)
+        // 遍历每个Block长度,并作为偏移量写入临时索引文件
         for (length <- lengths) {
           offset += length
           out.writeLong(offset)
@@ -153,13 +166,15 @@ private[spark] class IndexShuffleBlockResolver(
       } {
         out.close()
       }
-
+      // 获取map输出索引文件
       val dataFile = getDataFile(shuffleId, mapId)
       // There is only one IndexShuffleBlockResolver per executor, this synchronization make sure
       // the following check and rename are atomic.
       synchronized {
+        // 检查是索引文件和数据文件是否匹配
         val existingLengths = checkIndexAndDataFile(indexFile, dataFile, lengths.length)
         if (existingLengths != null) {
+          // 索引文件和数据文件不匹配,将临时索引文件和临时数据文件删除
           // Another attempt for the same task has already written our map outputs successfully,
           // so just use the existing partition lengths and delete our temporary map outputs.
           System.arraycopy(existingLengths, 0, lengths, 0, lengths.length)
@@ -168,6 +183,7 @@ private[spark] class IndexShuffleBlockResolver(
           }
           indexTmp.delete()
         } else {
+          // 索引文件和数据文件匹配,将临时索引文件和数据文件作为正式的索引和数据文件
           // This is the first successful attempt in writing the map outputs for this task,
           // so override any existing index and data files with the ones we wrote.
           if (indexFile.exists()) {
