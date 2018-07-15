@@ -16,7 +16,7 @@
  */
 
 package org.apache.spark.shuffle
-
+// scalastyle:off
 import java.io._
 import java.nio.channels.Channels
 import java.nio.file.Files
@@ -61,7 +61,7 @@ private[spark] class IndexShuffleBlockResolver(
     blockManager.diskBlockManager.getFile(ShuffleDataBlockId(shuffleId, mapId, NOOP_REDUCE_ID))
   }
   /**
-    * 用于获取Shuffle索引文件.
+    * 用于获取Shuffle索引文件.获取指定shuffle的指定map输出的索引文件.
     * */
   private def getIndexFile(shuffleId: Int, mapId: Int): File = {
     blockManager.diskBlockManager.getFile(ShuffleIndexBlockId(shuffleId, mapId, NOOP_REDUCE_ID))
@@ -88,7 +88,8 @@ private[spark] class IndexShuffleBlockResolver(
   }
 
   /**
-   * Check whether the given index and data files match each other.
+   * 检查给定的索引和数据文件是否匹配,如果是,返回数据文件的分区长度数组,否则返回null.<br>
+    * Check whether the given index and data files match each other.
    * If so, return the partition lengths in the data file. Otherwise return null.
    */
   private def checkIndexAndDataFile(index: File, data: File, blocks: Int): Array[Long] = {
@@ -171,12 +172,13 @@ private[spark] class IndexShuffleBlockResolver(
       // There is only one IndexShuffleBlockResolver per executor, this synchronization make sure
       // the following check and rename are atomic.
       synchronized {
-        // 检查是索引文件和数据文件是否匹配
+        // 检查是索引文件和数据文件是否匹配,checkIndexAndDataFile返回各个partition的长度数组
         val existingLengths = checkIndexAndDataFile(indexFile, dataFile, lengths.length)
         if (existingLengths != null) {
           // 索引文件和数据文件不匹配,将临时索引文件和临时数据文件删除
           // Another attempt for the same task has already written our map outputs successfully,
           // so just use the existing partition lengths and delete our temporary map outputs.
+          // 把existingLengths复制到参数lengths数组上
           System.arraycopy(existingLengths, 0, lengths, 0, lengths.length)
           if (dataTmp != null && dataTmp.exists()) {
             dataTmp.delete()
@@ -186,6 +188,7 @@ private[spark] class IndexShuffleBlockResolver(
           // 索引文件和数据文件匹配,将临时索引文件和数据文件作为正式的索引和数据文件
           // This is the first successful attempt in writing the map outputs for this task,
           // so override any existing index and data files with the ones we wrote.
+          // 说明是map任务中间结果输出的第一次成功尝试,需要将indexTmp和dataTmp重命名
           if (indexFile.exists()) {
             indexFile.delete()
           }
@@ -206,30 +209,42 @@ private[spark] class IndexShuffleBlockResolver(
       }
     }
   }
-
+  /** 获取指定的ShuffleBlockId对应的数据*/
   override def getBlockData(blockId: ShuffleBlockId): ManagedBuffer = {
     // The block is actually going to be a range of a single map output file for this map, so
     // find out the consolidated file, then the offset within that from our index
+    // 获取指定map任务输出的索引文件
     val indexFile = getIndexFile(blockId.shuffleId, blockId.mapId)
-
+    // 谷歌翻译:SPARK-22982：如果此FileInputStream的位置被另一段错误使用我们的文件描述符的代码向前搜索，
+    // 则此代码将获取错误的偏移量（这可能导致reducer被发送不同的reducer数据）。
+    // 此处添加的显式位置检查在SPARK-22982期间是一个有用的调试辅助工具，
+    // 可能有助于防止此类问题在将来再次发生，这就是为什么即使修复了SPARK-22982也将它们留在这里的原因。
     // SPARK-22982: if this FileInputStream's position is seeked forward by another piece of code
     // which is incorrectly using our file descriptor then this code will fetch the wrong offsets
     // (which may cause a reducer to be sent a different reducer's data). The explicit position
     // checks added here were a useful debugging aid during SPARK-22982 and may help prevent this
     // class of issue from re-occurring in the future which is why they are left here even though
     // SPARK-22982 is fixed.
+    // 获取文件channel,下面是一段nio的操作,看不太明白可以了解一下nio的buffer和channel
     val channel = Files.newByteChannel(indexFile.toPath)
+    // 设置channel读取的位置
     channel.position(blockId.reduceId * 8L)
+    // 获取数据输入流
     val in = new DataInputStream(Channels.newInputStream(channel))
     try {
+      // 读取偏移量
       val offset = in.readLong()
+      // 读取下一个偏移量
       val nextOffset = in.readLong()
+      //  实际的位置
       val actualPosition = channel.position()
+      // 期待的位置
       val expectedPosition = blockId.reduceId * 8L + 16
       if (actualPosition != expectedPosition) {
         throw new Exception(s"SPARK-22982: Incorrect channel position after index file reads: " +
           s"expected $expectedPosition but actual position was $actualPosition.")
       }
+      // 创建并返回FileSegmentManagedBuffer
       new FileSegmentManagedBuffer(
         transportConf,
         getDataFile(blockId.shuffleId, blockId.mapId),
