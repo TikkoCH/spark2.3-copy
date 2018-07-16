@@ -22,7 +22,8 @@ import java.util.Comparator
 import org.apache.spark.util.collection.WritablePartitionedPairCollection._
 
 /**
- * Implementation of WritablePartitionedPairCollection that wraps a map in which the keys are tuples
+ * WritablePartitionedPairCollection的实现，它包装了一个map，其中键是元组（分区ID，K）
+  * Implementation of WritablePartitionedPairCollection that wraps a map in which the keys are tuples
  * of (partition ID, K)
  */
 private[spark] class PartitionedAppendOnlyMap[K, V]
@@ -30,7 +31,9 @@ private[spark] class PartitionedAppendOnlyMap[K, V]
 
   def partitionedDestructiveSortedIterator(keyComparator: Option[Comparator[K]])
     : Iterator[((Int, K), V)] = {
+    // 生成比较器
     val comparator = keyComparator.map(partitionKeyComparator).getOrElse(partitionComparator)
+    // 对底层data数组进行整理和排序后返回迭代器
     destructiveSortedIterator(comparator)
   }
 

@@ -18,24 +18,32 @@
 package org.apache.spark.util.collection
 
 /**
- * An append-only map that keeps track of its estimated size in bytes.
+ * AppendOnlyMap和SizeTracker结合实现体.既可以在内存中对任务执行结果进行更新
+  * 和聚合运算,也可以对自身大小进行样本采集和大小估算
+  * An append-only map that keeps track of its estimated size in bytes.
  */
 private[spark] class SizeTrackingAppendOnlyMap[K, V]
   extends AppendOnlyMap[K, V] with SizeTracker
 {
   override def update(key: K, value: V): Unit = {
+    // 更新
     super.update(key, value)
+    // 完成采样
     super.afterUpdate()
   }
 
   override def changeValue(key: K, updateFunc: (Boolean, V) => V): V = {
+    // 聚合
     val newValue = super.changeValue(key, updateFunc)
+    // 完成采样
     super.afterUpdate()
     newValue
   }
 
   override protected def growTable(): Unit = {
+    // 扩容
     super.growTable()
+    // 样本重置
     resetSamples()
   }
 }
