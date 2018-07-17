@@ -204,7 +204,8 @@ private[spark] object SortShuffleManager extends Logging {
 }
 
 /**
- * Subclass of [[BaseShuffleHandle]], used to identify when we've chosen to use the
+ * 用于确定何时选择序列化的shuffle
+  * Subclass of [[BaseShuffleHandle]], used to identify when we've chosen to use the
  * serialized shuffle.
  */
 private[spark] class SerializedShuffleHandle[K, V](
@@ -215,7 +216,8 @@ private[spark] class SerializedShuffleHandle[K, V](
 }
 
 /**
- * Subclass of [[BaseShuffleHandle]], used to identify when we've chosen to use the
+ * 用于确定何时选择合并和排序的Shuffle路径
+  * Subclass of [[BaseShuffleHandle]], used to identify when we've chosen to use the
  * bypass merge sort shuffle path.
  */
 private[spark] class BypassMergeSortShuffleHandle[K, V](

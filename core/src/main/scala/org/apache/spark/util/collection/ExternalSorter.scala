@@ -396,6 +396,9 @@ private[spark] class ExternalSorter[K, V, C](
 
   /**
    * 将destructiveIterator方法返回的可迭代访问内存中数据的迭代器与已经溢出到磁盘的文件进行合并.
+    * 返回一个包含写入本对象所有数据的迭代器,根据分区分组.对于每个分区我们会有一个其内容的迭代器,
+    * 并且这些内容应该能按顺序访问(不能跳过到一个分区而不读取前一个分区).能够保证按照分区顺序返回
+    * 每个分区的
     * Merge a sequence of sorted files, giving an iterator over partitions and then over elements
    * inside each partition. This can be used to either write out a new file or return data to
    * the user.
@@ -414,15 +417,18 @@ private[spark] class ExternalSorter[K, V, C](
     (0 until numPartitions).iterator.map { p =>
       // 创建迭代器
       val inMemIterator = new IteratorForPartition(p, inMemBuffered)
-      // 遍历readers
+      // 创建iterators,readers转换成Seq[Iterator]再连接上Seq(inMemIterator)
       val iterators = readers.map(_.readNextPartition()) ++ Seq(inMemIterator)
       if (aggregator.isDefined) {
+        // 如果有聚集器
         // Perform partial aggregation across partitions
+        // 根据聚合器合并
         (p, mergeWithAggregation(
           iterators, aggregator.get.mergeCombiners, keyComparator, ordering.isDefined))
       } else if (ordering.isDefined) {
         // No aggregator given, but we have an ordering (e.g. used by reduce tasks in sortByKey);
         // sort the elements without trying to merge them
+        // 根据顺序合并
         (p, mergeSort(iterators, ordering.get))
       } else {
         (p, iterators.iterator.flatten)

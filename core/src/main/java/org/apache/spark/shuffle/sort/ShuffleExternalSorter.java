@@ -48,6 +48,9 @@ import org.apache.spark.unsafe.memory.MemoryBlock;
 import org.apache.spark.util.Utils;
 
 /**
+ * 专本对于shuffle数据进行排序的外部排序器,用于将map任务的输出存储到Tungsten中,在记录超过限制时,
+ * 将数据溢出到磁盘.与ExternalSorter不同,ShuffleExternalSorter本身并没有实现数据的持久化功能,
+ * 具体的持久化酱油ShuffleExeternalSorter的调用者UnsafeShuffleWriter实现.
  * An external sorter that is specialized for sort-based shuffle.
  * <p>
  * Incoming records are appended to data pages. When all records have been inserted (or when the
@@ -69,40 +72,59 @@ final class ShuffleExternalSorter extends MemoryConsumer {
 
   @VisibleForTesting
   static final int DISK_WRITE_BUFFER_SIZE = 1024 * 1024;
-
+  /** 分区数量*/
   private final int numPartitions;
+  /** 就是TaskMemoryManager*/
   private final TaskMemoryManager taskMemoryManager;
   private final BlockManager blockManager;
   private final TaskContext taskContext;
+  /** 对Shuffle写入(map任务输出到磁盘的度量系统组件),*/
   private final ShuffleWriteMetrics writeMetrics;
 
   /**
+   * 磁盘溢出的元素数量.
    * Force this sorter to spill when there are this many elements in memory.
    */
   private final int numElementsForSpillThreshold;
 
-  /** The buffer size to use when writing spills using DiskBlockObjectWriter */
+  /**
+   * 创建DiskBlockObjectWriter内部的文件缓冲大小.
+   * The buffer size to use when writing spills using DiskBlockObjectWriter */
   private final int fileBufferSizeBytes;
 
-  /** The buffer size to use when writing the sorted records to an on-disk file */
+  /**
+   * 当当将存储记录写入磁盘文件时所需缓存大小
+   * The buffer size to use when writing the sorted records to an on-disk file */
   private final int diskWriteBufferSize;
 
   /**
+   * * 已经分配的Page列表.保存正在排序的记录的内存page。 溢出时会释放此列表中的页面，
+   * 但原则上我们可以回收这些页面（如果我们在TaskMemoryManager本身中维护了
+   * 一个可重用页面池，则可能没有必要）。
    * Memory pages that hold the records being sorted. The pages in this list are freed when
    * spilling, although in principle we could recycle these pages across spills (on the other hand,
    * this might not be necessary if we maintained a pool of re-usable pages in the TaskMemoryManager
    * itself).
    */
   private final LinkedList<MemoryBlock> allocatedPages = new LinkedList<>();
-
+  /** 一处文件的元数据信息列表*/
   private final LinkedList<SpillInfo> spills = new LinkedList<>();
 
-  /** Peak memory used by this sorter so far, in bytes. **/
+  /**
+   * 本对象目前已使用内存,单位字节
+   * Peak memory used by this sorter so far, in bytes. **/
   private long peakMemoryUsedBytes;
 
   // These variables are reset after spilling:
+  /**
+   * 用于在内存中对插入的记录进行排序
+   * */
   @Nullable private ShuffleInMemorySorter inMemSorter;
+  /**
+   * 当前Page(即MemoryBlock)
+   * */
   @Nullable private MemoryBlock currentPage = null;
+  /** page的指针,用于向Tungsten写入数据时的地址信息*/
   private long pageCursor = -1;
 
   ShuffleExternalSorter(
@@ -245,11 +267,14 @@ final class ShuffleExternalSorter extends MemoryConsumer {
   }
 
   /**
+   * 根据内存压力对当前记录进行排序和溢出。
    * Sort and spill the current records in response to memory pressure.
    */
   @Override
   public long spill(long size, MemoryConsumer trigger) throws IOException {
+    // 如果MemoryConsumer参数不是本对象,或者inMemSorter为null,护着records数量==0
     if (trigger != this || inMemSorter == null || inMemSorter.numRecords() == 0) {
+      // 直接返回
       return 0L;
     }
 
@@ -258,14 +283,19 @@ final class ShuffleExternalSorter extends MemoryConsumer {
       Utils.bytesToString(getMemoryUsage()),
       spills.size(),
       spills.size() > 1 ? " times" : " time");
-
+    // 将内存中的金鹿进行排序后输出到磁盘.排序有两种,一种是对分区Id进行比较排序,
+    // 一种采用了基数排序
     writeSortedFile(false);
+    // 因此调用FreeMemory方法将所使用的Page全部释放.
     final long spillSize = freeMemory();
+    // 重置ShuffleInMemorySorter底层的长整形数组,便于下次排序.
     inMemSorter.reset();
     // Reset the in-memory sorter's pointer array only after freeing up the memory pages holding the
     // records. Otherwise, if the task is over allocated memory, then without freeing the memory
     // pages, we might not be able to get memory for the pointer array.
+    // 更新任务度量信息
     taskContext.taskMetrics().incMemoryBytesSpilled(spillSize);
+    // 返回溢出数据大小.
     return spillSize;
   }
 
@@ -322,6 +352,8 @@ final class ShuffleExternalSorter extends MemoryConsumer {
   }
 
   /**
+   * 检查是否有足够的空间将额外的记录插入到排序指针数组中,如果需要额外的空间,则增加数组的容量.
+   *  如果无法获取所需要的空间,则内存中的数据被溢出到磁盘
    * Checks whether there is enough space to insert an additional record in to the sort pointer
    * array and grows the array if additional space is required. If the required space cannot be
    * obtained, then the in-memory data will be spilled to disk.
@@ -356,6 +388,7 @@ final class ShuffleExternalSorter extends MemoryConsumer {
   }
 
   /**
+   * 申请更多的内存来插入额外的记录.如果无法获得所需内存,会从memorymanager那获取额外内存并且将内存数据溢出到磁盘.
    * Allocates more memory in order to insert an additional record. This will request additional
    * memory from the memory manager and spill if the requested memory can not be obtained.
    *
@@ -375,6 +408,7 @@ final class ShuffleExternalSorter extends MemoryConsumer {
   }
 
   /**
+   * 将记录写入shuffleSorter
    * Write a record to the shuffle sorter.
    */
   public void insertRecord(Object recordBase, long recordOffset, int length, int partitionId)
@@ -382,24 +416,32 @@ final class ShuffleExternalSorter extends MemoryConsumer {
 
     // for tests
     assert(inMemSorter != null);
+    // 如果记录数大于等于numElementsForSpillThreshold,那么需要将数据溢出到磁盘
     if (inMemSorter.numRecords() >= numElementsForSpillThreshold) {
       logger.info("Spilling data because number of spilledRecords crossed the threshold " +
         numElementsForSpillThreshold);
       spill();
     }
-
+    // 检查是否有足够的空间将额外的记录插入到排序指针数组中,如果需要额外的空间,则增加数组的容量.
+    // 如果无法获取所需要的空间,则内存中的数据被溢出到磁盘
     growPointerArrayIfNecessary();
     // Need 4 bytes to store the record length.
     final int required = length + 4;
+    // 检查是否有足够的空间,如果需要额外的空间,则申请分配新的Page.
     acquireNewPageIfNecessary(required);
 
     assert(currentPage != null);
+    // 获取memoryBlock中的对象
     final Object base = currentPage.getBaseObject();
+    // 获取页号和相对于内存块起始地址的偏移量.
     final long recordAddress = taskMemoryManager.encodePageNumberAndOffset(currentPage, pageCursor);
+    // 向page所代表的内存快的起始地址写入数据的长度,长度占用4字节.
     Platform.putInt(base, pageCursor, length);
     pageCursor += 4;
+    // 将数据拷贝到Page所代表的内存块中.
     Platform.copyMemory(recordBase, recordOffset, base, pageCursor, length);
     pageCursor += length;
+    // 将记录的元数据信息存储到内部用的长整形数组中,以便于排序.
     inMemSorter.insertRecord(recordAddress, partitionId);
   }
 

@@ -31,20 +31,21 @@ private[spark] class SortShuffleWriter[K, V, C](
     mapId: Int,
     context: TaskContext)
   extends ShuffleWriter[K, V] with Logging {
-
+  /** BaseShuffleHandle的依赖(ShuffleDependency)*/
   private val dep = handle.dependency
-
+  /** SparkEnv的BlockManager*/
   private val blockManager = SparkEnv.get.blockManager
-
+  /** ExternalSorter*/
   private var sorter: ExternalSorter[K, V, _] = null
 
   // Are we in the process of stopping? Because map tasks can call stop() with success = true
   // and then call stop() with success = false if they get an exception, we want to make sure
   // we don't try deleting files, etc twice.
+  /** 是否已经停止*/
   private var stopping = false
-
+  /** map任务的状态*/
   private var mapStatus: MapStatus = null
-
+  /** 对Shuffle写入的度量系统*/
   private val writeMetrics = context.taskMetrics().shuffleWriteMetrics
 
   /** Write a bunch of records to this task's output */
