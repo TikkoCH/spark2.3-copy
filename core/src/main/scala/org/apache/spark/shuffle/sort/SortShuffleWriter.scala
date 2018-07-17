@@ -14,7 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
+// scalastyle:off
 package org.apache.spark.shuffle.sort
 
 import org.apache.spark._
@@ -35,7 +35,7 @@ private[spark] class SortShuffleWriter[K, V, C](
   private val dep = handle.dependency
   /** SparkEnv的BlockManager*/
   private val blockManager = SparkEnv.get.blockManager
-  /** ExternalSorter*/
+  /** ExternalSorter对象*/
   private var sorter: ExternalSorter[K, V, _] = null
 
   // Are we in the process of stopping? Because map tasks can call stop() with success = true
@@ -48,19 +48,25 @@ private[spark] class SortShuffleWriter[K, V, C](
   /** 对Shuffle写入的度量系统*/
   private val writeMetrics = context.taskMetrics().shuffleWriteMetrics
 
-  /** Write a bunch of records to this task's output */
+  /**
+    * 将批量记录写入本任务的输出
+    * Write a bunch of records to this task's output */
   override def write(records: Iterator[Product2[K, V]]): Unit = {
     sorter = if (dep.mapSideCombine) {
+      // 如果shuffle依赖的map段结合为true
       require(dep.aggregator.isDefined, "Map-side combine without Aggregator specified!")
+      // 根据dep.aggregator和dep.keyOrdering创建一个ExternalSorter
       new ExternalSorter[K, V, C](
         context, dep.aggregator, Some(dep.partitioner), dep.keyOrdering, dep.serializer)
     } else {
       // In this case we pass neither an aggregator nor an ordering to the sorter, because we don't
       // care whether the keys get sorted in each partition; that will be done on the reduce side
       // if the operation being run is sortByKey.
+      // 如果mapSideCombine!=true.聚集器是None,排序也是None.
       new ExternalSorter[K, V, V](
         context, aggregator = None, Some(dep.partitioner), ordering = None, dep.serializer)
     }
+    // 使用ExternalSorter的insertAll方法将数据写入磁盘,等待reduce获取数据
     sorter.insertAll(records)
 
     // Don't bother including the time to open the merged output file in the shuffle write time,

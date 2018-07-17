@@ -16,7 +16,7 @@
  */
 
 package org.apache.spark.util.collection
-
+// scalastyle:off
 import java.io._
 import java.util.Comparator
 
@@ -194,7 +194,7 @@ private[spark] class ExternalSorter[K, V, C](
    * Exposed for testing.
    */
   private[spark] def numSpills: Int = spills.size
-  /** map任务之行结束后悔写入磁盘,等待reduce任务获取,但是写入之前,可能会对map的输出在内存中进行一些排序和聚合
+  /** map任务之行结束后会写入磁盘,等待reduce任务获取,但是写入之前,可能会对map的输出在内存中进行一些排序和聚合
     * 本方法用于map端输出的缓存处理
     * */
   def insertAll(records: Iterator[Product2[K, V]]): Unit = {
