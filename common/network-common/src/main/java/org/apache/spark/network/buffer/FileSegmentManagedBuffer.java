@@ -35,7 +35,7 @@ import org.apache.spark.network.util.LimitedInputStream;
 import org.apache.spark.network.util.TransportConf;
 
 /**
- * 用来读取文件中的一小段
+ * 由文件中的段支持的管理缓冲区。
  * A {@link ManagedBuffer} backed by a segment in a file.
  */
 public final class FileSegmentManagedBuffer extends ManagedBuffer {

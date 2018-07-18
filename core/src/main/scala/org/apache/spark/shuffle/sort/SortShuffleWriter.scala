@@ -72,12 +72,18 @@ private[spark] class SortShuffleWriter[K, V, C](
     // Don't bother including the time to open the merged output file in the shuffle write time,
     // because it just opens a single file, so is typically too fast to measure accurately
     // (see SPARK-3570).
+    // 获取输出文件
     val output = shuffleBlockResolver.getDataFile(dep.shuffleId, mapId)
+    // 返回临时文件的路径，该路径与path在同一目录中。
     val tmp = Utils.tempFileWith(output)
     try {
+      // 创建bllockId
       val blockId = ShuffleBlockId(dep.shuffleId, mapId, IndexShuffleBlockResolver.NOOP_REDUCE_ID)
+      // sorter会将数据写入磁盘,并返回文件的每个分区的长度数组
       val partitionLengths = sorter.writePartitionedFile(blockId, tmp)
+      // 将block索引写入索引文件
       shuffleBlockResolver.writeIndexFileAndCommit(dep.shuffleId, mapId, partitionLengths, tmp)
+      // 创建一个mapstatus
       mapStatus = MapStatus(blockManager.shuffleServerId, partitionLengths)
     } finally {
       if (tmp.exists() && !tmp.delete()) {
@@ -86,24 +92,33 @@ private[spark] class SortShuffleWriter[K, V, C](
     }
   }
 
-  /** Close this writer, passing along whether the map completed */
+  /**
+    * 请关闭该writer，参数是该map阶段是否已完成。
+    * Close this writer, passing along whether the map completed */
   override def stop(success: Boolean): Option[MapStatus] = {
     try {
+      // 如果已经停止了就返回None
       if (stopping) {
         return None
       }
       stopping = true
+      // 如果成功了,返回本对象的mapStatus
       if (success) {
         return Option(mapStatus)
       } else {
+        // 否则返回None
         return None
       }
     } finally {
+      // 清理我们的分类器，它可能有自己的中间文件
       // Clean up our sorter, which may have its own intermediate files
       if (sorter != null) {
         val startTime = System.nanoTime()
+        // 调用sorter的stop
         sorter.stop()
+        // 更新度量系统
         writeMetrics.incWriteTime(System.nanoTime - startTime)
+        // 清空sorter的引用
         sorter = null
       }
     }
@@ -111,6 +126,8 @@ private[spark] class SortShuffleWriter[K, V, C](
 }
 
 private[spark] object SortShuffleWriter {
+  // 是否绕过合并排序,取决于dep.mapSideCombine,如果true不绕过,
+  // 如果false还要看dep.partitioner.numPartitions是否小于等于bypassMergeThreshold
   def shouldBypassMergeSort(conf: SparkConf, dep: ShuffleDependency[_, _, _]): Boolean = {
     // We cannot bypass sorting if we need to do map-side aggregation.
     if (dep.mapSideCombine) {

@@ -29,6 +29,7 @@ public interface TempFileManager {
   File createTempFile();
 
   /**
+   * 注册临时文件,当不再使用时候会将其删除.返回注册是否成功,如果不成功调用者应该将文件删除.
    * Register a temp file to clean up when it won't be used any more. Return whether the
    * file is registered successfully. If `false`, the caller should clean up the file by itself.
    */

@@ -32,18 +32,22 @@ public abstract class ShuffleClient implements Closeable {
   public void init(String appId) { }
 
   /**
+   * 异步从远程节点抓取block列表.该API需要一个blockIds序列,所以实现类可以批量请求,并且不返回future所以
+   * 底层实现可以在获取到block数据时直接调用onBlockFetchSuccess,不会阻塞到所有block都获取到.<br>
    * Fetch a sequence of blocks from a remote node asynchronously,
    *
    * Note that this API takes a sequence so the implementation can batch requests, and does not
    * return a future so the underlying implementation can invoke onBlockFetchSuccess as soon as
    * the data of a block is fetched, rather than waiting for all blocks to be fetched.
    *
-   * @param host the host of the remote node.
-   * @param port the port of the remote node.
-   * @param execId the executor id.
-   * @param blockIds block ids to fetch.
-   * @param listener the listener to receive block fetching status.
-   * @param tempFileManager TempFileManager to create and clean temp files.
+   * @param host 远端主机名.the host of the remote node.
+   * @param port 远端端口.the port of the remote node.
+   * @param execId executorId.the executor id.
+   * @param blockIds 要获取的block列表.block ids to fetch.
+   * @param listener 用来接收block抓取状态的监听器.the listener to receive block fetching status.
+   * @param tempFileManager 创建和清理临时文件的管理器.如果不是null,远程block会以流的形式进入shuffle文件
+   *                        来减少内存开销,否则会存储在内存中.
+   *                        TempFileManager to create and clean temp files.
    *                        If it's not <code>null</code>, the remote blocks will be streamed
    *                        into temp shuffle files to reduce the memory usage, otherwise,
    *                        they will be kept in memory.
