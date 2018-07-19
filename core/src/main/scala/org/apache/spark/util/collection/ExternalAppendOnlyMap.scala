@@ -146,16 +146,20 @@ class ExternalAppendOnlyMap[K, V, C](
     // An update function for the map that we reuse across entries to avoid allocating
     // a new closure each time
     var curEntry: Product2[K, V] = null
+    // 定义用于更新和聚合的update函数
     val update: (Boolean, C) => C = (hadVal, oldVal) => {
       if (hadVal) mergeValue(oldVal, curEntry._2) else createCombiner(curEntry._2)
     }
-
+    // 遍历Iterator
     while (entries.hasNext) {
       curEntry = entries.next()
+      // 评估集合的当前大小
       val estimatedSize = currentMap.estimateSize()
+      // 更新_peakMemoryUsedBytes
       if (estimatedSize > _peakMemoryUsedBytes) {
         _peakMemoryUsedBytes = estimatedSize
       }
+      // 溢出到磁盘
       if (maybeSpill(currentMap, estimatedSize)) {
         currentMap = new SizeTrackingAppendOnlyMap[K, C]
       }

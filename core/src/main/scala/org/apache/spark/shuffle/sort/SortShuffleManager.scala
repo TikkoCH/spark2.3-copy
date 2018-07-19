@@ -16,7 +16,7 @@
  */
 
 package org.apache.spark.shuffle.sort
-
+// scalastyle:off
 import java.util.concurrent.ConcurrentHashMap
 
 import org.apache.spark._
@@ -24,7 +24,10 @@ import org.apache.spark.internal.Logging
 import org.apache.spark.shuffle._
 
 /**
- * In sort-based shuffle, incoming records are sorted according to their target partition ids, then
+ * 在基于排序的shuffle中,进入的记录按照目标分区ID排序,然后输出到一个单独的map文件中.
+  * reduce为了独处map输出,需要获取map输出文件的连续内容.当map的输出数据太大已经不适合放在内存中时,
+  * 排序后的输出子集将被溢出到文件中,这些磁盘上的文件将被合并生成最终的输出文件.
+  * In sort-based shuffle, incoming records are sorted according to their target partition ids, then
  * written to a single map output file. Reducers fetch contiguous regions of this file in order to
  * read their portion of the map output. In cases where the map output data is too large to fit in
  * memory, sorted subsets of the output can are spilled to disk and those on-disk files are merged
@@ -75,14 +78,16 @@ private[spark] class SortShuffleManager(conf: SparkConf) extends ShuffleManager 
   }
 
   /**
-   * A mapping from shuffle ids to the number of mappers producing output for those shuffles.
+   * ShuflleId与此Shuffle生成输出的map任务的数量之间的映射关系
+    * A mapping from shuffle ids to the number of mappers producing output for those shuffles.
    */
   private[this] val numMapsForShuffle = new ConcurrentHashMap[Int, Int]()
 
   override val shuffleBlockResolver = new IndexShuffleBlockResolver(conf)
 
   /**
-   * Obtains a [[ShuffleHandle]] to pass to tasks.
+   * 根据不同条件创建ShuffleHandle实例
+    * Obtains a [[ShuffleHandle]] to pass to tasks.
    */
   override def registerShuffle[K, V, C](
       shuffleId: Int,
@@ -94,14 +99,17 @@ private[spark] class SortShuffleManager(conf: SparkConf) extends ShuffleManager 
       // them at the end. This avoids doing serialization and deserialization twice to merge
       // together the spilled files, which would happen with the normal code path. The downside is
       // having multiple files open at a time and thus more memory allocated to buffers.
+      // 需要绕过合并和排序则创建BypassMergeSortShuffleHandle
       new BypassMergeSortShuffleHandle[K, V](
         shuffleId, numMaps, dependency.asInstanceOf[ShuffleDependency[K, V, V]])
     } else if (SortShuffleManager.canUseSerializedShuffle(dependency)) {
       // Otherwise, try to buffer map outputs in a serialized form, since this is more efficient:
+      // 如果可以使用序列化Shuffle创建SerializedShuffleHandle
       new SerializedShuffleHandle[K, V](
         shuffleId, numMaps, dependency.asInstanceOf[ShuffleDependency[K, V, V]])
     } else {
       // Otherwise, buffer map outputs in a deserialized form:
+      // 其他情况BaseShuffleHandle
       new BaseShuffleHandle(shuffleId, numMaps, dependency)
     }
   }
@@ -119,7 +127,9 @@ private[spark] class SortShuffleManager(conf: SparkConf) extends ShuffleManager 
       handle.asInstanceOf[BaseShuffleHandle[K, _, C]], startPartition, endPartition, context)
   }
 
-  /** Get a writer for a given partition. Called on executors by map tasks. */
+  /**
+    * 为指定的分区获取writer.map任务所在的executor会调用该方法
+    * Get a writer for a given partition. Called on executors by map tasks. */
   override def getWriter[K, V](
       handle: ShuffleHandle,
       mapId: Int,
@@ -150,7 +160,9 @@ private[spark] class SortShuffleManager(conf: SparkConf) extends ShuffleManager 
     }
   }
 
-  /** Remove a shuffle's metadata from the ShuffleManager. */
+  /**
+    * 根据指定的shuffleId删除此Shuffle郭成的所有mao任务数据文件和索引文件.
+    * Remove a shuffle's metadata from the ShuffleManager. */
   override def unregisterShuffle(shuffleId: Int): Boolean = {
     Option(numMapsForShuffle.remove(shuffleId)).foreach { numMaps =>
       (0 until numMaps).foreach { mapId =>

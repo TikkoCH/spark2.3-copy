@@ -16,7 +16,7 @@
  */
 
 package org.apache.spark.shuffle
-
+// scalastyle:off
 import org.apache.spark._
 import org.apache.spark.internal.{config, Logging}
 import org.apache.spark.serializer.SerializerManager
@@ -65,8 +65,10 @@ private[spark] class BlockStoreShuffleReader[K, C](
     val serializerInstance = dep.serializer.newInstance()
 
     // Create a key/value iterator for each stream
-    // 为每个流创建键值对迭代器
+    // 为每个流创建键值对迭代器,
     val recordIter = wrappedStreams.flatMap { case (blockId, wrappedStream) =>
+      // 注意：下面的asKeyValueIterator将一个键/值迭代器包装在NextIterator中。
+      // NextIterator确保在读取所有记录时在底层InputStream上调用close（）。
       // Note: the asKeyValueIterator below wraps a key/value iterator inside of a
       // NextIterator. The NextIterator makes sure that close() is called on the
       // underlying InputStream when all records have been read.
@@ -74,6 +76,7 @@ private[spark] class BlockStoreShuffleReader[K, C](
     }
 
     // Update the context task metrics for each record read.
+    // 为每个读取的记录更新taskMetrics
     val readMetrics = context.taskMetrics.createTempShuffleReadMetrics()
     val metricIter = CompletionIterator[(Any, Any), Iterator[(Any, Any)]](
       recordIter.map { record =>
@@ -83,14 +86,18 @@ private[spark] class BlockStoreShuffleReader[K, C](
       context.taskMetrics().mergeShuffleReadMetrics())
 
     // An interruptible iterator must be used here in order to support task cancellation
+    // 这里使用interruptibleIter
     val interruptibleIter = new InterruptibleIterator[(Any, Any)](context, metricIter)
-
+    // 如果指定了聚合函数
     val aggregatedIter: Iterator[Product2[K, C]] = if (dep.aggregator.isDefined) {
+
       if (dep.mapSideCombine) {
+        // 并且允许在map端进行合并,在reduce端对数据进行合并
         // We are reading values that are already combined
         val combinedKeyValuesIterator = interruptibleIter.asInstanceOf[Iterator[(K, C)]]
         dep.aggregator.get.combineCombinersByKey(combinedKeyValuesIterator, context)
       } else {
+        // 如果不允许在map端进行合并,那就在reduce端对数据进行缓存
         // We don't know the value type, but also don't care -- the dependency *should*
         // have made sure its compatible w/ this aggregator, which will convert the value
         // type to the combined type C
@@ -98,22 +105,27 @@ private[spark] class BlockStoreShuffleReader[K, C](
         dep.aggregator.get.combineValuesByKey(keyValuesIterator, context)
       }
     } else {
+      // 没有指定聚合函数,不做任何处理
       require(!dep.mapSideCombine, "Map-side combine without Aggregator specified!")
       interruptibleIter.asInstanceOf[Iterator[Product2[K, C]]]
     }
 
     // Sort the output if there is a sort ordering defined.
+    // 如果指定了排序函数,将输出排序
     dep.keyOrdering match {
       case Some(keyOrd: Ordering[K]) =>
         // Create an ExternalSorter to sort the data.
+        // 创建ExeternalSorter对数据排序
         val sorter =
           new ExternalSorter[K, C, C](context, ordering = Some(keyOrd), serializer = dep.serializer)
+        // 对数据进行缓存
         sorter.insertAll(aggregatedIter)
         context.taskMetrics().incMemoryBytesSpilled(sorter.memoryBytesSpilled)
         context.taskMetrics().incDiskBytesSpilled(sorter.diskBytesSpilled)
         context.taskMetrics().incPeakExecutionMemory(sorter.peakMemoryUsedBytes)
         CompletionIterator[Product2[K, C], Iterator[Product2[K, C]]](sorter.iterator, sorter.stop())
       case None =>
+        // 如果没有指定排序函数,返回aggregatedIter
         aggregatedIter
     }
   }
