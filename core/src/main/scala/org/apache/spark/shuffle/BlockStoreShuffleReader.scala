@@ -61,10 +61,11 @@ private[spark] class BlockStoreShuffleReader[K, C](
       SparkEnv.get.conf.get(config.REDUCER_MAX_BLOCKS_IN_FLIGHT_PER_ADDRESS),
       SparkEnv.get.conf.get(config.MAX_REMOTE_BLOCK_SIZE_FETCH_TO_MEM),
       SparkEnv.get.conf.getBoolean("spark.shuffle.detectCorrupt", true))
-
+    // 获取序列化实例
     val serializerInstance = dep.serializer.newInstance()
 
     // Create a key/value iterator for each stream
+    // 为每个流创建键值对迭代器
     val recordIter = wrappedStreams.flatMap { case (blockId, wrappedStream) =>
       // Note: the asKeyValueIterator below wraps a key/value iterator inside of a
       // NextIterator. The NextIterator makes sure that close() is called on the
