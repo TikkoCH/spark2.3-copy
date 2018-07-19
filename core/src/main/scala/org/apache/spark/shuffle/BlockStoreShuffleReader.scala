@@ -25,23 +25,30 @@ import org.apache.spark.util.CompletionIterator
 import org.apache.spark.util.collection.ExternalSorter
 
 /**
- * Fetches and reads the partitions in range [startPartition, endPartition) from a shuffle by
+ * 用于Shuffle执行过程中,reduce任务从其他节点的Block文件中读取[startPartition, endPartition)范围内的
+  * 数据.
+  * Fetches and reads the partitions in range [startPartition, endPartition) from a shuffle by
  * requesting them from other nodes' block stores.
  */
 private[spark] class BlockStoreShuffleReader[K, C](
     handle: BaseShuffleHandle[K, _, C],
-    startPartition: Int,
-    endPartition: Int,
-    context: TaskContext,
-    serializerManager: SerializerManager = SparkEnv.get.serializerManager,
-    blockManager: BlockManager = SparkEnv.get.blockManager,
+    startPartition: Int, // 分区起点
+    endPartition: Int,   // 分区终点
+    context: TaskContext,// task上下文
+    serializerManager: SerializerManager = SparkEnv.get.serializerManager,// 序列化管理
+    blockManager: BlockManager = SparkEnv.get.blockManager, // block管理
     mapOutputTracker: MapOutputTracker = SparkEnv.get.mapOutputTracker)
   extends ShuffleReader[K, C] with Logging {
-
+  /** handle的shuffle依赖*/
   private val dep = handle.dependency
 
-  /** Read the combined key-values for this reduce task */
+  /**
+    * 为本reduceTask读取绑定的键值对
+    * Read the combined key-values for this reduce task */
   override def read(): Iterator[Product2[K, C]] = {
+    // 创建ShuffleBlockFetcherIterator.ShuffleBlockFetcherIterator初始化时
+    // 会划分本地和远程的block,并且获取了本地和远端的Block,将获取的block封装进
+    // SuccessFetchResult或者FailureFetchResult放入results队列
     val wrappedStreams = new ShuffleBlockFetcherIterator(
       context,
       blockManager.shuffleClient,
