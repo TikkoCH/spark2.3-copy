@@ -16,7 +16,7 @@
  */
 
 package org.apache.spark.deploy.master
-
+// scalastyle:off
 import java.nio.ByteBuffer
 
 import scala.collection.JavaConverters._
@@ -34,26 +34,27 @@ import org.apache.spark.serializer.Serializer
 private[master] class ZooKeeperPersistenceEngine(conf: SparkConf, val serializer: Serializer)
   extends PersistenceEngine
   with Logging {
-
+  // zookeeper上的工作目录
   private val WORKING_DIR = conf.get("spark.deploy.zookeeper.dir", "/spark") + "/master_status"
+  // zk客户端.就是基于zk客户端升级的一个好用的客户端,apache顶级项目
   private val zk: CuratorFramework = SparkCuratorUtil.newClient(conf)
 
   SparkCuratorUtil.mkdir(zk, WORKING_DIR)
 
-
+  // 持久化数据,存储在zk上
   override def persist(name: String, obj: Object): Unit = {
     serializeIntoFile(WORKING_DIR + "/" + name, obj)
   }
-
+  // 删除
   override def unpersist(name: String): Unit = {
     zk.delete().forPath(WORKING_DIR + "/" + name)
   }
-
+  // 获取WORKING_DIR节点下文件名匹配的所有子节点,并对每个子节点反序列化
   override def read[T: ClassTag](prefix: String): Seq[T] = {
     zk.getChildren.forPath(WORKING_DIR).asScala
       .filter(_.startsWith(prefix)).flatMap(deserializeFromFile[T])
   }
-
+  // 关闭zk客户端
   override def close() {
     zk.close()
   }

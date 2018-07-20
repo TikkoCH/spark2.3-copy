@@ -16,7 +16,7 @@
  */
 
 package org.apache.spark.executor
-
+// scalastyle:off
 import java.io.{File, NotSerializableException}
 import java.lang.Thread.UncaughtExceptionHandler
 import java.lang.management.ManagementFactory
@@ -192,10 +192,13 @@ private[spark] class Executor(
   startDriverHeartbeater()
 
   private[executor] def numRunningTasks: Int = runningTasks.size()
-
+  /** 运行task*/
   def launchTask(context: ExecutorBackend, taskDescription: TaskDescription): Unit = {
+    // 创建taskRunner
     val tr = new TaskRunner(context, taskDescription)
+    // 放入缓存
     runningTasks.put(taskDescription.taskId, tr)
+    // 执行taskRunner
     threadPool.execute(tr)
   }
 
@@ -257,27 +260,36 @@ private[spark] class Executor(
     extends Runnable {
 
     val taskId = taskDescription.taskId
+    // 线程名称
     val threadName = s"Executor task launch worker for task $taskId"
+    // 任务名称
     private val taskName = taskDescription.name
 
-    /** If specified, this task has been killed and this option contains the reason. */
+    /**
+      * 如果指定了,该参数中会包含task被kill的原因
+      * If specified, this task has been killed and this option contains the reason. */
     @volatile private var reasonIfKilled: Option[String] = None
-
+    /** 线程id*/
     @volatile private var threadId: Long = -1
 
     def getThreadId: Long = threadId
 
-    /** Whether this task has been finished. */
+    /**
+      * 该task是否已经完成
+      * Whether this task has been finished. */
     @GuardedBy("TaskRunner.this")
     private var finished = false
 
     def isFinished: Boolean = synchronized { finished }
 
-    /** How much the JVM process has spent in GC when the task starts to run. */
+    /**
+      * 任务尝试开始运行钱,JVM进程执行GC已花费的时间.
+      * How much the JVM process has spent in GC when the task starts to run. */
     @volatile var startGCTime: Long = _
 
     /**
-     * The task to run. This will be set in run() by deserializing the task binary coming
+     * 要运行的Task.通过对Driver传递过来的序列化的Task进行反序列化后获得.
+      * The task to run. This will be set in run() by deserializing the task binary coming
      * from the driver. Once it is set, it will never be changed.
      */
     @volatile var task: Task[Any] = _
@@ -295,7 +307,8 @@ private[spark] class Executor(
     }
 
     /**
-     * Set the finished flag to true and clear the current thread's interrupt status
+     * 将任务完成标志为true,并清理当前的中断状态
+      * Set the finished flag to true and clear the current thread's interrupt status
      */
     private def setTaskFinishedAndClearInterruptStatus(): Unit = synchronized {
       this.finished = true
@@ -308,43 +321,60 @@ private[spark] class Executor(
       // is followed by cancel(interrupt=True). Thus we use notifyAll() to avoid a lost wakeup:
       notifyAll()
     }
-
+    /** TaskRunner线程运行的内容*/
     override def run(): Unit = {
+      // 获取ThreadId,设置Threadname
       threadId = Thread.currentThread.getId
       Thread.currentThread.setName(threadName)
       val threadMXBean = ManagementFactory.getThreadMXBean
+      // 创建TaskMemoryManager
       val taskMemoryManager = new TaskMemoryManager(env.memoryManager, taskId)
+      // 获取反序列化开始的时间
       val deserializeStartTime = System.currentTimeMillis()
+      // 获取反序列化CPU时间
       val deserializeStartCpuTime = if (threadMXBean.isCurrentThreadCpuTimeSupported) {
         threadMXBean.getCurrentThreadCpuTime
       } else 0L
+      // 为线程设置repl的classloader
       Thread.currentThread.setContextClassLoader(replClassLoader)
+      // 获取序列化实例
       val ser = env.closureSerializer.newInstance()
       logInfo(s"Running $taskName (TID $taskId)")
+      // 向集群调度发送任务状态更新为RUNNING
       execBackend.statusUpdate(taskId, TaskState.RUNNING, EMPTY_BYTE_BUFFER)
       var taskStart: Long = 0
       var taskStartCpu: Long = 0
+      // JVM用于GC的时间
       startGCTime = computeTotalGcTime()
 
       try {
+        // 必须在调用updateDependencies（）之前设置，
+        // 以防取出依赖项需要访问其中包含的属性（例如，用于访问控制）。
         // Must be set before updateDependencies() is called, in case fetching dependencies
         // requires access to properties contained within (e.g. for access control).
+        // 设置Task描述的属性
         Executor.taskDeserializationProps.set(taskDescription.properties)
-
+        // 下载jar包依赖并加入类加载器
         updateDependencies(taskDescription.addedFiles, taskDescription.addedJars)
+        // 反序列化Task并加载
         task = ser.deserialize[Task[Any]](
           taskDescription.serializedTask, Thread.currentThread.getContextClassLoader)
+        // 获取task描述的属性信息
         task.localProperties = taskDescription.properties
+        // 设置taskMemoryManager
         task.setTaskMemoryManager(taskMemoryManager)
 
         // If this task has been killed before we deserialized it, let's quit now. Otherwise,
         // continue executing the task.
+        // 如果当前任务被在反序列化之前就被kill掉了,那就退出,否则继续执行.
         val killReason = reasonIfKilled
         if (killReason.isDefined) {
           // Throw an exception rather than returning, because returning within a try{} block
           // causes a NonLocalReturnControl exception to be thrown. The NonLocalReturnControl
           // exception will be caught by the catch block, leading to an incorrect ExceptionFailure
           // for the task.
+          // 抛出异常而不是返回,因为如果在try块中返回会导致NonLocalRetrnnControl异常
+          // NonLocalReturnControl会被catch到导致task不正确的失败.
           throw new TaskKilledException(killReason.get)
         }
 
@@ -352,28 +382,38 @@ private[spark] class Executor(
         // in case FetchFailures have occurred. In local mode `env.mapOutputTracker` will be
         // MapOutputTrackerMaster and its cache invalidation is not based on epoch numbers so
         // we don't need to make any special calls here.
+        // 非local模式更新MapoutTracker的Epoch
         if (!isLocal) {
           logDebug("Task " + taskId + "'s epoch is " + task.epoch)
           env.mapOutputTracker.asInstanceOf[MapOutputTrackerWorker].updateEpoch(task.epoch)
         }
 
         // Run the actual task and measure its runtime.
+        // 获取当前时间
         taskStart = System.currentTimeMillis()
+        // cpu时间
         taskStartCpu = if (threadMXBean.isCurrentThreadCpuTimeSupported) {
           threadMXBean.getCurrentThreadCpuTime
         } else 0L
+        // 是否抛出异常
         var threwException = true
         val value = try {
+          // 调用task的run方法,实际巡行task子类的runTask方法.
           val res = task.run(
             taskAttemptId = taskId,
             attemptNumber = taskDescription.attemptNumber,
             metricsSystem = env.metricsSystem)
+          // 正常运行的话就是没有异常
           threwException = false
+          // 返回task的运行结果和累加器的更新
           res
         } finally {
+          // 释放所有的block锁
           val releasedLocks = env.blockManager.releaseAllLocksForTask(taskId)
+          // 清空分配的任务尝试的内存
           val freedMemory = taskMemoryManager.cleanUpAllAllocatedMemory()
-
+          // 下面两个if一起说吧,如果内存移除或者block的锁无法释放,
+          // 就抛异常或打印警告
           if (freedMemory > 0 && !threwException) {
             val errMsg = s"Managed memory leak detected; size = $freedMemory bytes, TID = $taskId"
             if (conf.getBoolean("spark.unsafe.exceptionOnMemoryLeak", false)) {
@@ -394,6 +434,7 @@ private[spark] class Executor(
             }
           }
         }
+        // 对于每个task失败的结果,打印日志
         task.context.fetchFailed.foreach { fetchFailure =>
           // uh-oh.  it appears the user code has caught the fetch-failure without throwing any
           // other exceptions.  Its *possible* this is what the user meant to do (though highly
@@ -402,19 +443,24 @@ private[spark] class Executor(
             s"unrecoverable fetch failures!  Most likely this means user code is incorrectly " +
             s"swallowing Spark's internal ${classOf[FetchFailedException]}", fetchFailure)
         }
+        // 获取结束时间
         val taskFinish = System.currentTimeMillis()
+        // 结束cpu时间
         val taskFinishCpu = if (threadMXBean.isCurrentThreadCpuTimeSupported) {
           threadMXBean.getCurrentThreadCpuTime
         } else 0L
 
         // If the task has been killed, let's fail it.
+        // 如果task被kill掉了,那就结束
         task.context.killTaskIfInterrupted()
-
+        // 获取序列化器
         val resultSer = env.serializer.newInstance()
+        // 获取时间
         val beforeSerialization = System.currentTimeMillis()
+        // 将结果value序列化
         val valueBytes = resultSer.serialize(value)
         val afterSerialization = System.currentTimeMillis()
-
+        // 这部分是度量系统更新用的
         // Deserialization happens in two parts: first, we deserialize a Task object, which
         // includes the Partition. Second, Task.run() deserializes the RDD and function to be run.
         task.metrics.setExecutorDeserializeTime(
@@ -470,6 +516,7 @@ private[spark] class Executor(
         executorSource.METRIC_MEMORY_BYTES_SPILLED.inc(task.metrics.memoryBytesSpilled)
 
         // Note: accumulator updates must be collected after TaskMetrics is updated
+        // 更新度量系统之后应该把累加器的更细结果记录下来
         val accumUpdates = task.collectAccumulatorUpdates()
         // TODO: do not serialize value twice
         val directResult = new DirectTaskResult(valueBytes, accumUpdates)
@@ -479,29 +526,37 @@ private[spark] class Executor(
         // directSend = sending directly back to the driver
         val serializedResult: ByteBuffer = {
           if (maxResultSize > 0 && resultSize > maxResultSize) {
+            // maxResultSize>0并且尝试任务运行的结果超过maxResultSize
             logWarning(s"Finished $taskName (TID $taskId). Result is larger than maxResultSize " +
               s"(${Utils.bytesToString(resultSize)} > ${Utils.bytesToString(maxResultSize)}), " +
               s"dropping it.")
+            // 将结果的大小序列化为SerializedResult,不保存执行结果
             ser.serialize(new IndirectTaskResult[Any](TaskResultBlockId(taskId), resultSize))
           } else if (resultSize > maxDirectResultSize) {
+            // 如果任务尝试运行的结果小于maxDirectResultSize
             val blockId = TaskResultBlockId(taskId)
+            // 将结果写入本地存储体系
             env.blockManager.putBytes(
               blockId,
               new ChunkedByteBuffer(serializedDirectResult.duplicate()),
               StorageLevel.MEMORY_AND_DISK_SER)
             logInfo(
               s"Finished $taskName (TID $taskId). $resultSize bytes result sent via BlockManager)")
+            // 将结果的大小序列化为serilizedDirectResult
             ser.serialize(new IndirectTaskResult[Any](blockId, resultSize))
           } else {
             logInfo(s"Finished $taskName (TID $taskId). $resultSize bytes result sent to driver")
+            // 直接将结果学历恶化为serializedResult
             serializedDirectResult
           }
         }
-
+        // 将任务完成标志为true,并清理当前的中断状态
         setTaskFinishedAndClearInterruptStatus()
+        // 想调度系统更细任务状态FINISHED
         execBackend.statusUpdate(taskId, TaskState.FINISHED, serializedResult)
 
       } catch {
+        // 下面是catch异常的处理,异常无外乎汇报,清理工作
         case t: Throwable if hasFetchFailure && !Utils.isFatalError(t) =>
           val reason = task.context.fetchFailed.get.toTaskFailedReason
           if (!t.isInstanceOf[FetchFailedException]) {
@@ -579,6 +634,7 @@ private[spark] class Executor(
             uncaughtExceptionHandler.uncaughtException(Thread.currentThread(), t)
           }
       } finally {
+        // 正在运行的task缓存中删除task
         runningTasks.remove(taskId)
       }
     }
@@ -752,7 +808,9 @@ private[spark] class Executor(
   }
 
   /**
-   * Download any missing dependencies if we receive a new set of files and JARs from the
+   * 如果我们从SparkContext获得jar包或文件首先去下载缺失的依赖.
+    * 然后将获取jar加入类加载器.
+    * Download any missing dependencies if we receive a new set of files and JARs from the
    * SparkContext. Also adds any new JARs we fetched to the class loader.
    */
   private def updateDependencies(newFiles: Map[String, Long], newJars: Map[String, Long]) {
