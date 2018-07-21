@@ -24,7 +24,8 @@ import org.apache.spark.internal.Logging
 import org.apache.spark.util.{IntParam, Utils}
 
 /**
- * Command-line parser for the master.
+ * 为master转换命令行的参数
+  * Command-line parser for the master.
  */
 private[master] class MasterArguments(args: Array[String], conf: SparkConf) extends Logging {
   var host = Utils.localHostName()
@@ -56,7 +57,7 @@ private[master] class MasterArguments(args: Array[String], conf: SparkConf) exte
   if (conf.contains("spark.master.ui.port")) {
     webUiPort = conf.get("spark.master.ui.port").toInt
   }
-
+  // 转换了host,port,webuiport,propertiesFIle
   @tailrec
   private def parse(args: List[String]): Unit = args match {
     case ("--ip" | "-i") :: value :: tail =>
