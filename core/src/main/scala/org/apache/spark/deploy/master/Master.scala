@@ -691,11 +691,17 @@ private[deploy] class Master(
     val memoryPerExecutor = app.desc.memoryPerExecutorMB
     // 可用的Worker数量.
     val numUsable = usableWorkers.length
+    /** 用于保存每个worker给应用分配的executor个数*/
     val assignedCores = new Array[Int](numUsable) // Number of cores to give to each worker
+    /** 用于保存每个Worker给应用分配的Executor数的数组.
+      * 通过数组索引与usableWOrker是中的workerInfo对应*/
     val assignedExecutors = new Array[Int](numUsable) // Number of new executors on each worker
+    /** 给app要分配的内核数.*/
     var coresToAssign = math.min(app.coresLeft, usableWorkers.map(_.coresFree).sum)
 
-    /** Return whether the specified worker can launch an executor for this app. */
+    /**
+      * 返回指定worker是否可以为该app启动executor
+      * Return whether the specified worker can launch an executor for this app. */
     def canLaunchExecutor(pos: Int): Boolean = {
       val keepScheduling = coresToAssign >= minCoresPerExecutor
       val enoughCores = usableWorkers(pos).coresFree - assignedCores(pos) >= minCoresPerExecutor
