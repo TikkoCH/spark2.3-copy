@@ -72,8 +72,10 @@ private[deploy] class ExecutorRunner(
     workerThread = new Thread("ExecutorRunner for " + fullId) {
       override def run() { fetchAndRunExecutor() }
     }
+    // 创建线程并启动
     workerThread.start()
     // Shutdown hook that kills actors on shutdown.
+    // JVM进程退出钱杀死Executor进程
     shutdownHook = ShutdownHookManager.addShutdownHook { () =>
       // It's possible that we arrive here before calling `fetchAndRunExecutor`, then `state` will
       // be `ExecutorState.RUNNING`. In this case, we should set `state` to `FAILED`.
@@ -84,7 +86,8 @@ private[deploy] class ExecutorRunner(
   }
 
   /**
-   * Kill executor process, wait for exit and notify worker to update resource status.
+   * 杀死executor进程,等待退出并通知worker更新资源状态
+    * Kill executor process, wait for exit and notify worker to update resource status.
    *
    * @param message the exception message which caused the executor's death
    */
@@ -137,18 +140,21 @@ private[deploy] class ExecutorRunner(
   }
 
   /**
-   * Download and run the executor described in our ApplicationDescription
+   * 下载并运行ApplicationDescription中描述的executor
+    * Download and run the executor described in our ApplicationDescription
    */
   private def fetchAndRunExecutor() {
     try {
       // Launch the process
+      // 构造ProcessBuilder,进程命令由appDesc.command决定.
       val builder = CommandUtils.buildProcessBuilder(appDesc.command, new SecurityManager(conf),
         memory, sparkHome.getAbsolutePath, substituteVariables)
       val command = builder.command()
       val formattedCommand = command.asScala.mkString("\"", "\" \"", "\"")
       logInfo(s"Launch command: $formattedCommand")
-
+      // 将executorDir设置为ProcessBuilder执行目录.为worker接收到LaunchExecutor消息创建的目录.
       builder.directory(executorDir)
+      // 设置环境变量
       builder.environment.put("SPARK_EXECUTOR_DIRS", appLocalDirs.mkString(File.pathSeparator))
       // In case we are running this from within the Spark Shell, avoid creating a "scala"
       // parent process for the executor command
@@ -163,12 +169,13 @@ private[deploy] class ExecutorRunner(
         }
       builder.environment.put("SPARK_LOG_URL_STDERR", s"${baseUrl}stderr")
       builder.environment.put("SPARK_LOG_URL_STDOUT", s"${baseUrl}stdout")
-
+      //启动ProcessBuilder,生成进程.
       process = builder.start()
       val header = "Spark Executor Command: %s\n%s\n\n".format(
         formattedCommand, "=" * 40)
 
       // Redirect its stdout and stderr to files
+      // 重定向其标准输出流和标准错误流
       val stdout = new File(executorDir, "stdout")
       stdoutAppender = FileAppender(process.getInputStream, stdout, conf)
 
@@ -178,14 +185,17 @@ private[deploy] class ExecutorRunner(
 
       // Wait for it to exit; executor may exit with code 0 (when driver instructs it to shutdown)
       // or with nonzero exit code
+      // 等待获取进程退出状态
       val exitCode = process.waitFor()
       state = ExecutorState.EXITED
       val message = "Command exited with code " + exitCode
+      // 退出之后向worker发送ExecutorStateChanged消息
       worker.send(ExecutorStateChanged(appId, execId, state, Some(message), Some(exitCode)))
     } catch {
       case interrupted: InterruptedException =>
         logInfo("Runner thread for executor " + fullId + " interrupted")
         state = ExecutorState.KILLED
+        // 捕获到异常killProcess
         killProcess(None)
       case e: Exception =>
         logError("Error running executor", e)

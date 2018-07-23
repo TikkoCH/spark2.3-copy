@@ -34,7 +34,8 @@ import org.apache.spark.rpc._
 import org.apache.spark.util.{RpcUtils, ThreadUtils}
 
 /**
- * Interface allowing applications to speak with a Spark standalone cluster manager.
+ * 允许应用程序与Spark独立集群管理器通信的接口。
+  * Interface allowing applications to speak with a Spark standalone cluster manager.
  *
  * Takes a master URL, an app description, and a listener for cluster events, and calls
  * back the listener when various events occur.
@@ -44,29 +45,35 @@ import org.apache.spark.util.{RpcUtils, ThreadUtils}
 private[spark] class StandaloneAppClient(
     rpcEnv: RpcEnv,
     masterUrls: Array[String],
-    appDescription: ApplicationDescription,
-    listener: StandaloneAppClientListener,
+    appDescription: ApplicationDescription, // app描述信息
+    listener: StandaloneAppClientListener,  // 对集群事件的监听器
     conf: SparkConf)
   extends Logging {
-
+  /** Master的RPC地址*/
   private val masterRpcAddresses = masterUrls.map(RpcAddress.fromSparkURL(_))
-
+  /** 注册超时时间*/
   private val REGISTRATION_TIMEOUT_SECONDS = 20
+  /** 注册重试次数*/
   private val REGISTRATION_RETRIES = 3
-
+  /** 持有ClientEndPoint的RpcEndpoint*/
   private val endpoint = new AtomicReference[RpcEndpointRef]
   private val appId = new AtomicReference[String]
+  /** 是否已经将app注册到master*/
   private val registered = new AtomicBoolean(false)
-
+  // app与集群对话的客户端
   private class ClientEndpoint(override val rpcEnv: RpcEnv) extends ThreadSafeRpcEndpoint
     with Logging {
-
+    /** 处于激活状态的Master的RpcEndpointRef*/
     private var master: Option[RpcEndpointRef] = None
     // To avoid calling listener.disconnected() multiple times
+    /** 是否已经与master断开连接*/
     private var alreadyDisconnected = false
     // To avoid calling listener.dead() multiple times
+    /** 是否已经死掉,防止多次调用dead方法*/
     private val alreadyDead = new AtomicBoolean(false)
+    /** 保存向master注册app的任务返回的future*/
     private val registerMasterFutures = new AtomicReference[Array[JFuture[_]]]
+    /** 提交关于注册的定时调度返回的JScheduledFuture*/
     private val registrationRetryTimer = new AtomicReference[JScheduledFuture[_]]
 
     // A thread pool for registering with masters. Because registering with a master is a blocking
@@ -80,14 +87,17 @@ private[spark] class StandaloneAppClient(
     // A scheduled executor for scheduling the registration actions
     private val registrationRetryThread =
       ThreadUtils.newDaemonSingleThreadScheduledExecutor("appclient-registration-retry-thread")
-
+    /** 注册rpcenv的dispatcher时会触发该方法*/
     override def onStart(): Unit = {
       try {
+          // 向master注册
         registerWithMaster(1)
       } catch {
         case e: Exception =>
           logWarning("Failed to connect to master", e)
+          // 如果异常,标记为断开连接
           markDisconnected()
+          // 停止client
           stop()
       }
     }
@@ -114,7 +124,8 @@ private[spark] class StandaloneAppClient(
     }
 
     /**
-     * Register with all masters asynchronously. It will call `registerWithMaster` every
+     * 异步向所有master注册
+      * Register with all masters asynchronously. It will call `registerWithMaster` every
      * REGISTRATION_TIMEOUT_SECONDS seconds until exceeding REGISTRATION_RETRIES times.
      * Once we connect to a master successfully, all scheduling work and Futures will be cancelled.
      *
@@ -151,7 +162,7 @@ private[spark] class StandaloneAppClient(
     private def isPossibleMaster(remoteAddress: RpcAddress): Boolean = {
       masterRpcAddresses.contains(remoteAddress)
     }
-
+    // 处理消息
     override def receive: PartialFunction[Any, Unit] = {
       case RegisteredApplication(appId_, masterRef) =>
         // FIXME How to handle the following cases?
@@ -244,7 +255,8 @@ private[spark] class StandaloneAppClient(
     }
 
     /**
-     * Notify the listener that we disconnected, if we hadn't already done so before.
+     * 通知监听器已经断开连接了.
+      * Notify the listener that we disconnected, if we hadn't already done so before.
      */
     def markDisconnected() {
       if (!alreadyDisconnected) {

@@ -77,21 +77,27 @@ private[deploy] class DriverRunner(
     }
   }
 
-  /** Starts a thread to run and manage the driver. */
+  /**
+    * 启动一个线程运行并管理driver
+    * Starts a thread to run and manage the driver. */
   private[worker] def start() = {
+    // 创建一个Thread并启动
     new Thread("DriverRunner for " + driverId) {
       override def run() {
         var shutdownHook: AnyRef = null
         try {
+          // 添加钩子,用于JVM几次呢哼退出钱杀死Drvier进程
           shutdownHook = ShutdownHookManager.addShutdownHook { () =>
             logInfo(s"Worker shutting down, killing driver $driverId")
             kill()
           }
 
           // prepare driver jars and run driver
+          // 准备driver的jar并且运行driver
           val exitCode = prepareAndRunDriver()
 
           // set final state depending on if forcibly killed and process exit code
+          // 设置最终状态
           finalState = if (exitCode == 0) {
             Some(DriverState.FINISHED)
           } else if (killed) {
@@ -111,6 +117,7 @@ private[deploy] class DriverRunner(
         }
 
         // notify worker of final driver state, possible exception
+        // 发送DriverStateChanged消息
         worker.send(DriverStateChanged(driverId, finalState.get, finalException))
       }
     }.start()
@@ -167,11 +174,14 @@ private[deploy] class DriverRunner(
     }
     localJarFile.getAbsolutePath
   }
-
+  /** 准备并运行Driver*/
   private[worker] def prepareAndRunDriver(): Int = {
+    // 创建driver工作目录
     val driverDir = createWorkingDirectory()
+    // 下载用户指定的jar文件
     val localJarFilename = downloadUserJar(driverDir)
 
+    // 替换字符串变量的方法
     def substituteVariables(argument: String): String = argument match {
       case "{{WORKER_URL}}" => workerUrl
       case "{{USER_JAR}}" => localJarFilename
@@ -179,9 +189,10 @@ private[deploy] class DriverRunner(
     }
 
     // TODO: If we add ability to submit multiple jars they should also be added here
+    // 构造processBuilder,进程命令由driverDesc.command决定
     val builder = CommandUtils.buildProcessBuilder(driverDesc.command, securityManager,
       driverDesc.mem, sparkHome.getAbsolutePath, substituteVariables)
-
+    // 运行Driver
     runDriver(builder, driverDir, driverDesc.supervise)
   }
 
