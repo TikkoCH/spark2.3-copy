@@ -46,20 +46,24 @@ private[spark] class CoarseGrainedExecutorBackend(
     userClassPath: Seq[URL],
     env: SparkEnv)
   extends ThreadSafeRpcEndpoint with ExecutorBackend with Logging {
-
+  /** 是否停止*/
   private[this] val stopping = new AtomicBoolean(false)
+  /** executor实例*/
   var executor: Executor = null
+  /** driverEndpointRef*/
   @volatile var driver: Option[RpcEndpointRef] = None
 
   // If this CoarseGrainedExecutorBackend is changed to support multiple threads, then this may need
   // to be changed so that we don't share the serializer instance across threads
+  /** Executor所需的SparkEnv中的closureSerializer实例*/
   private[this] val ser: SerializerInstance = env.closureSerializer.newInstance()
-
+  // 注册RpcEnv时会触发该方法
   override def onStart() {
     logInfo("Connecting to driver: " + driverUrl)
     rpcEnv.asyncSetupEndpointRefByURI(driverUrl).flatMap { ref =>
       // This is a very fast action so we can use "ThreadUtils.sameThread"
       driver = Some(ref)
+      // 向DriverEndpoint发送RegisterExecutor消息
       ref.ask[Boolean](RegisterExecutor(executorId, self, hostname, cores, extractLogUrls))
     }(ThreadUtils.sameThread).onComplete {
       // This is a very fast action so we can use "ThreadUtils.sameThread"
@@ -77,18 +81,20 @@ private[spark] class CoarseGrainedExecutorBackend(
   }
 
   override def receive: PartialFunction[Any, Unit] = {
+    // 注册Executor
     case RegisteredExecutor =>
       logInfo("Successfully registered with driver")
       try {
+        // 创建一个Executor
         executor = new Executor(executorId, hostname, env, userClassPath, isLocal = false)
       } catch {
         case NonFatal(e) =>
           exitExecutor(1, "Unable to create executor due to " + e.getMessage, e)
       }
-
+    // 注册失败,然后退出executor
     case RegisterExecutorFailed(message) =>
       exitExecutor(1, "Slave registration failed: " + message)
-
+    // 启动任务
     case LaunchTask(data) =>
       if (executor == null) {
         exitExecutor(1, "Received LaunchTask command but executor was null")
@@ -97,21 +103,21 @@ private[spark] class CoarseGrainedExecutorBackend(
         logInfo("Got assigned task " + taskDesc.taskId)
         executor.launchTask(this, taskDesc)
       }
-
+    // 杀掉任务
     case KillTask(taskId, _, interruptThread, reason) =>
       if (executor == null) {
         exitExecutor(1, "Received KillTask command but executor was null")
       } else {
         executor.killTask(taskId, interruptThread, reason)
       }
-
+    // 停止executor
     case StopExecutor =>
       stopping.set(true)
       logInfo("Driver commanded a shutdown")
       // Cannot shutdown here because an ack may need to be sent back to the caller. So send
       // a message to self to actually do the shutdown.
       self.send(Shutdown)
-
+    // 停止executor
     case Shutdown =>
       stopping.set(true)
       new Thread("CoarseGrainedExecutorBackend-stop-executor") {
@@ -139,17 +145,19 @@ private[spark] class CoarseGrainedExecutorBackend(
       logWarning(s"An unknown ($remoteAddress) driver disconnected.")
     }
   }
-
+  // backend将Task状态发送给DriverEndpoint,以便对Task状态更新
   override def statusUpdate(taskId: Long, state: TaskState, data: ByteBuffer) {
     val msg = StatusUpdate(executorId, taskId, state, data)
     driver match {
+        // 发送给Driver
       case Some(driverRef) => driverRef.send(msg)
       case None => logWarning(s"Drop $msg because has not yet connected to driver")
     }
   }
 
   /**
-   * This function can be overloaded by other child classes to handle
+   * 可被子类覆盖,便于不同的executor退出需求.
+    * This function can be overloaded by other child classes to handle
    * executor exits differently. For e.g. when an executor goes down,
    * back-end may not want to take the parent process down.
    */
@@ -191,6 +199,7 @@ private[spark] object CoarseGrainedExecutorBackend extends Logging {
 
       // Bootstrap to fetch the driver's Spark properties.
       val executorConf = new SparkConf
+      // 创建RpcEnv,主要用于从Driver中获取信息
       val fetcher = RpcEnv.create(
         "driverPropsFetcher",
         hostname,
@@ -198,13 +207,18 @@ private[spark] object CoarseGrainedExecutorBackend extends Logging {
         executorConf,
         new SecurityManager(executorConf),
         clientMode = true)
+      // 获取Driver的rpcEndRef
       val driver = fetcher.setupEndpointRefByURI(driverUrl)
+      // 发送RetrieveSparkAppConfig消息用来获得
       val cfg = driver.askSync[SparkAppConfig](RetrieveSparkAppConfig)
+      // 获取属性文件,添加appId
       val props = cfg.sparkProperties ++ Seq[(String, String)](("spark.app.id", appId))
+      // 关闭driver
       fetcher.shutdown()
 
       // Create SparkEnv using properties we fetched from the driver.
       val driverConf = new SparkConf()
+      // 将配置放入driverConf
       for ((key, value) <- props) {
         // this is required for SSL in standalone mode
         if (SparkConf.isExecutorStartupConf(key)) {
@@ -220,28 +234,31 @@ private[spark] object CoarseGrainedExecutorBackend extends Logging {
           .getMethod("startCredentialUpdater", classOf[SparkConf])
           .invoke(null, driverConf)
       }
-
+      // 使用序列化委派令牌添加或覆盖当前用户的凭据，还确认已设置正确的hadoop配置
       cfg.hadoopDelegationCreds.foreach { tokens =>
         SparkHadoopUtil.get.addDelegationTokens(tokens, driverConf)
       }
-
+      // 创建Executor自身的SparkEnv,
       val env = SparkEnv.createExecutorEnv(
         driverConf, executorId, hostname, cores, cfg.ioEncryptionKey, isLocal = false)
-
+      // 创建CoarseGrainedExecutorBackend,并注册到executor自身的sparkEnv的RpcEnv中
       env.rpcEnv.setupEndpoint("Executor", new CoarseGrainedExecutorBackend(
         env.rpcEnv, driverUrl, executorId, hostname, cores, userClassPath, env))
+      // 创建workerWatcher,注册到Executor的RpcEnv
       workerUrl.foreach { url =>
         env.rpcEnv.setupEndpoint("WorkerWatcher", new WorkerWatcher(env.rpcEnv, url))
       }
+      // 等待rpc存在
       env.rpcEnv.awaitTermination()
       if (driverConf.contains("spark.yarn.credentials.file")) {
+        // 调用stopCredentialUpdater方法
         Utils.classForName("org.apache.spark.deploy.yarn.YarnSparkHadoopUtil")
           .getMethod("stopCredentialUpdater")
           .invoke(null)
       }
     }
   }
-
+  // 定义了main方法,可以作为单独的java进程启动
   def main(args: Array[String]) {
     var driverUrl: String = null
     var executorId: String = null
@@ -250,7 +267,7 @@ private[spark] object CoarseGrainedExecutorBackend extends Logging {
     var appId: String = null
     var workerUrl: Option[String] = None
     val userClassPath = new mutable.ListBuffer[URL]()
-
+    // 解析参数
     var argv = args.toList
     while (!argv.isEmpty) {
       argv match {

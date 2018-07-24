@@ -138,7 +138,8 @@ class SparkHadoopUtil extends Logging {
   }
 
   /**
-   * Add or overwrite current user's credentials with serialized delegation tokens,
+   * 使用序列化委派令牌添加或覆盖当前用户的凭据，确认的hadoop配置已设置正确。
+    * Add or overwrite current user's credentials with serialized delegation tokens,
    * also confirms correct hadoop configuration is set.
    */
   private[spark] def addDelegationTokens(tokens: Array[Byte], sparkConf: SparkConf) {

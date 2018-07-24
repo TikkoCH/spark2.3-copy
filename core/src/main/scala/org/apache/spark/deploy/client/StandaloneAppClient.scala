@@ -103,17 +103,22 @@ private[spark] class StandaloneAppClient(
     }
 
     /**
-     *  Register with all masters asynchronously and returns an array `Future`s for cancellation.
+     * 尝试向所有master注册
+      *  Register with all masters asynchronously and returns an array `Future`s for cancellation.
      */
     private def tryRegisterAllMasters(): Array[JFuture[_]] = {
       for (masterAddress <- masterRpcAddresses) yield {
+        // 注册线程池中提交任务
         registerMasterThreadPool.submit(new Runnable {
           override def run(): Unit = try {
+            // 如果注册了直接返回
             if (registered.get) {
               return
             }
             logInfo("Connecting to master " + masterAddress.toSparkURL + "...")
+            // 设置master的endpointref
             val masterRef = rpcEnv.setupEndpointRef(masterAddress, Master.ENDPOINT_NAME)
+            // 向master发送RegisterApplication消息
             masterRef.send(RegisterApplication(appDescription, self))
           } catch {
             case ie: InterruptedException => // Cancelled
@@ -132,16 +137,25 @@ private[spark] class StandaloneAppClient(
      * nthRetry means this is the nth attempt to register with master.
      */
     private def registerWithMaster(nthRetry: Int) {
+      // 向所有master尝试注册app,并将返回的Future保存到registerMasterFutures.
       registerMasterFutures.set(tryRegisterAllMasters())
+      // 向registrationRetryThread提交定时任务.
       registrationRetryTimer.set(registrationRetryThread.schedule(new Runnable {
         override def run(): Unit = {
+          // 如果注册成功
           if (registered.get) {
+            // 向其他master取消注册
             registerMasterFutures.get.foreach(_.cancel(true))
+            // 关闭ixanchengchi
             registerMasterThreadPool.shutdownNow()
           } else if (nthRetry >= REGISTRATION_RETRIES) {
+            // 重试超过次数,标记当前clientEndpoint进入dead状态
             markDead("All masters are unresponsive! Giving up.")
           } else {
+            // 其他情况
+            // 取消注册app
             registerMasterFutures.get.foreach(_.cancel(true))
+            // 添加重试次数
             registerWithMaster(nthRetry + 1)
           }
         }
@@ -203,14 +217,15 @@ private[spark] class StandaloneAppClient(
         alreadyDisconnected = false
         masterRef.send(MasterChangeAcknowledged(appId.get))
     }
-
+    // 从写的通信的receiveAndReply方法
     override def receiveAndReply(context: RpcCallContext): PartialFunction[Any, Unit] = {
+      // 收到stopAppClient后,向master发送UnregisterApplication消息
       case StopAppClient =>
         markDead("Application has been stopped.")
         sendToMaster(UnregisterApplication(appId.get))
         context.reply(true)
         stop()
-
+      // 转发给Master
       case r: RequestExecutors =>
         master match {
           case Some(m) => askAndReplyAsync(m, context, r)
@@ -218,7 +233,7 @@ private[spark] class StandaloneAppClient(
             logWarning("Attempted to request executors before registering with Master.")
             context.reply(false)
         }
-
+      // 转发给master
       case k: KillExecutors =>
         master match {
           case Some(m) => askAndReplyAsync(m, context, k)
@@ -264,10 +279,12 @@ private[spark] class StandaloneAppClient(
         alreadyDisconnected = true
       }
     }
-
+    /** 标记死亡*/
     def markDead(reason: String) {
       if (!alreadyDead.get) {
+        // 调用监听器的死亡方法并添加原因
         listener.dead(reason)
+        // 设置成员变量
         alreadyDead.set(true)
       }
     }
@@ -282,16 +299,18 @@ private[spark] class StandaloneAppClient(
     }
 
   }
-
+  /** 启动StandaloneAppClient*/
   def start() {
     // Just launch an rpcEndpoint; it will call back into the listener.
+    // 向sparkcontext的sparkEnv的RpcEnv注册ClientEndpoint
     endpoint.set(rpcEnv.setupEndpoint("AppClient", new ClientEndpoint(rpcEnv)))
   }
-
+  /** 停止StandaloneAppclient*/
   def stop() {
     if (endpoint.get != null) {
       try {
         val timeout = RpcUtils.askRpcTimeout(conf)
+        // 发送StopAppClient消息
         timeout.awaitResult(endpoint.get.ask[Boolean](StopAppClient))
       } catch {
         case e: TimeoutException =>
@@ -302,7 +321,8 @@ private[spark] class StandaloneAppClient(
   }
 
   /**
-   * Request executors from the Master by specifying the total number desired,
+   * 向master请求所需的所有executor资源
+    * Request executors from the Master by specifying the total number desired,
    * including existing pending and running executors.
    *
    * @return whether the request is acknowledged.
@@ -317,11 +337,13 @@ private[spark] class StandaloneAppClient(
   }
 
   /**
-   * Kill the given list of executors through the Master.
+   * 向master请求杀死Executor
+    * Kill the given list of executors through the Master.
    * @return whether the kill request is acknowledged.
    */
   def killExecutors(executorIds: Seq[String]): Future[Boolean] = {
     if (endpoint.get != null && appId.get != null) {
+      // 发送KillExecutors消息
       endpoint.get.ask[Boolean](KillExecutors(appId.get, executorIds))
     } else {
       logWarning("Attempted to kill executors before driver fully initialized.")

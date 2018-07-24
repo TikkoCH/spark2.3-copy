@@ -21,7 +21,8 @@ import org.apache.spark.internal.Logging
 import org.apache.spark.rpc._
 
 /**
- * Endpoint which connects to a worker process and terminates the JVM if the
+ * 连接到wroekr进程的endPoint，如果连接断开，则终止JVM。 提供worker及其关联子进程之间的生命共享。
+  * Endpoint which connects to a worker process and terminates the JVM if the
  * connection is severed.
  * Provides fate sharing between a worker and its associated child processes.
  */

@@ -108,7 +108,7 @@ private[spark] abstract class RpcEnv(conf: SparkConf) {
   def asyncSetupEndpointRefByURI(uri: String): Future[RpcEndpointRef]
 
   /**
-    * 同步根据uri检索RpcEndpointRef
+    * 根据uri检索RpcEndpointRef,方法会阻塞
    * Retrieve the [[RpcEndpointRef]] represented by `uri`. This is a blocking action.
    */
   def setupEndpointRefByURI(uri: String): RpcEndpointRef = {
