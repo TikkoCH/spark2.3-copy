@@ -420,17 +420,20 @@ private[spark] class ApplicationMaster(args: ApplicationMasterArguments) extends
   private def sparkContextInitialized(sc: SparkContext) = {
     sparkContextPromise.success(sc)
   }
-
+  /** 向yarn注册AM*/
   private def registerAM(
       _sparkConf: SparkConf,
       _rpcEnv: RpcEnv,
       driverRef: RpcEndpointRef,
       uiAddress: Option[String]) = {
+    // 获取appid
     val appId = client.getAttemptId().getApplicationId().toString()
+    // 获取尝试id
     val attemptId = client.getAttemptId().getAttemptId().toString()
+    // 获取历史server地址
     val historyAddress = ApplicationMaster
       .getHistoryServerAddress(_sparkConf, yarnConf, appId, attemptId)
-
+    // driver的rpc地址
     val driverUrl = RpcEndpointAddress(
       _sparkConf.get("spark.driver.host"),
       _sparkConf.get("spark.driver.port").toInt,
@@ -819,7 +822,9 @@ object ApplicationMaster extends Logging {
 
   def main(args: Array[String]): Unit = {
     SignalUtils.registerLogger(log)
+    // 解析参数的类ApplicationMasterArguments
     val amArgs = new ApplicationMasterArguments(args)
+    // 创建am
     master = new ApplicationMaster(amArgs)
     System.exit(master.run())
   }

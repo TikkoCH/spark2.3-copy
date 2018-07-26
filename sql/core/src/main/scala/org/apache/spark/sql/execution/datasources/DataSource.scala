@@ -79,20 +79,23 @@ import org.apache.spark.util.Utils
  */
 case class DataSource(
     sparkSession: SparkSession,
-    className: String,
-    paths: Seq[String] = Nil,
-    userSpecifiedSchema: Option[StructType] = None,
-    partitionColumns: Seq[String] = Seq.empty,
-    bucketSpec: Option[BucketSpec] = None,
-    options: Map[String, String] = Map.empty,
+    className: String,    // 决定要使用的类
+    paths: Seq[String] = Nil, // 数据源多个路径
+    userSpecifiedSchema: Option[StructType] = None, // 用户制定的StructType.
+    partitionColumns: Seq[String] = Seq.empty,  // 分区字段的序列
+    bucketSpec: Option[BucketSpec] = None,      // 数据分桶
+    options: Map[String, String] = Map.empty,   // 保存选项
     catalogTable: Option[CatalogTable] = None) extends Logging {
-
+  // 定义一个样例类:数据源的信息,名称,元数据
   case class SourceInfo(name: String, schema: StructType, partitionColumns: Seq[String])
-
+  // 数据源的类
   lazy val providingClass: Class[_] =
     DataSource.lookupDataSource(className, sparkSession.sessionState.conf)
+  //
   lazy val sourceInfo: SourceInfo = sourceSchema()
+  // 忽略大小写的选项配置
   private val caseInsensitiveOptions = CaseInsensitiveMap(options)
+  // 当前配置的Resolver，可用于确定两个标识符是否相等。
   private val equality = sparkSession.sessionState.conf.resolver
 
   bucketSpec.map { bucket =>
@@ -224,8 +227,11 @@ case class DataSource(
     (dataSchema, partitionSchema)
   }
 
-  /** Returns the name and schema of the source that can be used to continually read data. */
+  /**
+    * 返回可持续读取数据源的名称和格式
+    * Returns the name and schema of the source that can be used to continually read data. */
   private def sourceSchema(): SourceInfo = {
+    // 创建实例,然后匹配,根据不同类型构造SourceInfo
     providingClass.newInstance() match {
       case s: StreamSourceProvider =>
         val (name, schema) = s.sourceSchema(
@@ -322,7 +328,8 @@ case class DataSource(
   }
 
   /**
-   * Create a resolved [[BaseRelation]] that can be used to read data from or write data into this
+   * 根据数据源提供类和用户指定格式创建读写数据源所需的baseRelation.
+    * Create a resolved [[BaseRelation]] that can be used to read data from or write data into this
    * [[DataSource]]
    *
    * @param checkFilesExist Whether to confirm that the files exist when generating the
@@ -554,7 +561,9 @@ case class DataSource(
 
 object DataSource extends Logging {
 
-  /** A map to maintain backward compatibility in case we move data sources around. */
+  /**
+    * 类名与对应DataSourceRegister实现类之间的映射关系
+    * A map to maintain backward compatibility in case we move data sources around. */
   private val backwardCompatibilityMap: Map[String, String] = {
     val jdbc = classOf[JdbcRelationProvider].getCanonicalName
     val json = classOf[JsonFileFormat].getCanonicalName
@@ -595,8 +604,11 @@ object DataSource extends Logging {
     "org.apache.spark.sql.sources.HadoopFsRelationProvider",
     "org.apache.spark.Logging")
 
-  /** Given a provider name, look up the data source class definition. */
+  /**
+    * 根据指定名字找到对应的数据源类
+    * Given a provider name, look up the data source class definition. */
   def lookupDataSource(provider: String, conf: SQLConf): Class[_] = {
+    // 从缓存中找到制定名称对应的数据源
     val provider1 = backwardCompatibilityMap.getOrElse(provider, provider) match {
       case name if name.equalsIgnoreCase("orc") &&
           conf.getConf(SQLConf.ORC_IMPLEMENTATION) == "native" =>
@@ -606,18 +618,24 @@ object DataSource extends Logging {
         "org.apache.spark.sql.hive.orc.OrcFileFormat"
       case name => name
     }
+    // 拼接provider1和DefaultSource
     val provider2 = s"$provider1.DefaultSource"
+    // 获取类加载器
     val loader = Utils.getContextOrSparkClassLoader
+    // 这个serviceLoader能够加载指定接口的所有实现类.
     val serviceLoader = ServiceLoader.load(classOf[DataSourceRegister], loader)
-
     try {
+      // 找到匹配名称的类
       serviceLoader.asScala.filter(_.shortName().equalsIgnoreCase(provider1)).toList match {
         // the provider format did not match any given registered aliases
         case Nil =>
+          // 没有匹配
           try {
+            // 再由provider2加载试试
             Try(loader.loadClass(provider1)).orElse(Try(loader.loadClass(provider2))) match {
               case Success(dataSource) =>
                 // Found the data source using fully qualified path
+                // 成功
                 dataSource
               case Failure(error) =>
                 if (provider1.startsWith("org.apache.spark.sql.hive.orc")) {
@@ -656,6 +674,8 @@ object DataSource extends Logging {
           // There are multiple registered aliases for the input. If there is single datasource
           // that has "org.apache.spark" package in the prefix, we use it considering it is an
           // internal datasource within Spark.
+          // 输入有多个注册别名。 如果单个数据源在前缀中包含“org.apache.spark”包，
+          // 我们会使用它，因为它是Spark中的内部数据源。
           val sourceNames = sources.map(_.getClass.getName)
           val internalSources = sources.filter(_.getClass.getName.startsWith("org.apache.spark"))
           if (internalSources.size == 1) {

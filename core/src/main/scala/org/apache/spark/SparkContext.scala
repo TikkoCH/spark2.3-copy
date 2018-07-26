@@ -2824,7 +2824,7 @@ object SparkContext extends Logging {
         }
     }
   }
-
+  /** 根据url获取集群Manager*/
   private def getClusterManager(url: String): Option[ExternalClusterManager] = {
     val loader = Utils.getContextOrSparkClassLoader
     val serviceLoaders =

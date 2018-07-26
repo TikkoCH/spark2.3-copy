@@ -150,7 +150,8 @@ case class CatalogTablePartition(
 
 
 /**
- * A container for bucketing information.
+ * 信息分桶的容器.Bucketing是一中将数据集分解为更多可管理部分的技术.
+  * A container for bucketing information.
  * Bucketing is a technology for decomposing data sets into more manageable parts, and the number
  * of buckets is fixed so it does not fluctuate with data.
  *

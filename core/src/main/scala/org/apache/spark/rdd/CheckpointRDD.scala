@@ -22,25 +22,32 @@ import scala.reflect.ClassTag
 import org.apache.spark.{Partition, SparkContext, TaskContext}
 
 /**
- * An RDD partition used to recover checkpointed data.
+ * 一个用于恢复检查点数据的rdd分区
+  * An RDD partition used to recover checkpointed data.
  */
 private[spark] class CheckpointRDDPartition(val index: Int) extends Partition
 
 /**
- * An RDD that recovers checkpointed data from storage.
+ * 一个用于从存储中恢复检查点数据的RDD
+  * An RDD that recovers checkpointed data from storage.
  */
 private[spark] abstract class CheckpointRDD[T: ClassTag](sc: SparkContext)
   extends RDD[T](sc, Nil) {
 
   // CheckpointRDD should not be checkpointed again
+  /** 保存检查点*/
   override def doCheckpoint(): Unit = { }
+  /** 读取检查点*/
   override def checkpoint(): Unit = { }
+  /** 本地检查点*/
   override def localCheckpoint(): this.type = this
 
   // Note: There is a bug in MiMa that complains about `AbstractMethodProblem`s in the
   // base [[org.apache.spark.rdd.RDD]] class if we do not override the following methods.
   // scalastyle:off
+  /** 获取检查点的分区数组*/
   protected override def getPartitions: Array[Partition] = ???
+  /** 从检查点恢复数据*/
   override def compute(p: Partition, tc: TaskContext): Iterator[T] = ???
   // scalastyle:on
 

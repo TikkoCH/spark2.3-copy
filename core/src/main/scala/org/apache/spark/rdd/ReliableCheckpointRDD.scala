@@ -33,27 +33,34 @@ import org.apache.spark.io.CompressionCodec
 import org.apache.spark.util.{SerializableConfiguration, Utils}
 
 /**
- * An RDD that reads from checkpoint files previously written to reliable storage.
+ * 从先前写入可靠存储的检查点文件读取的RDD.
+  * An RDD that reads from checkpoint files previously written to reliable storage.
  */
 private[spark] class ReliableCheckpointRDD[T: ClassTag](
     sc: SparkContext,
-    val checkpointPath: String,
-    _partitioner: Option[Partitioner] = None
+    val checkpointPath: String, // 检查点目录的字符串
+    _partitioner: Option[Partitioner] = None // 指定分区器
   ) extends CheckpointRDD[T](sc) {
-
+  // hadoop配置信息
   @transient private val hadoopConf = sc.hadoopConfiguration
+  /** checkpointPath对应的Haddop文件系统中的路径*/
   @transient private val cpath = new Path(checkpointPath)
+  /** 使用hadoopConf的到的org.apache.hadoop.fs.FileSystem*/
   @transient private val fs = cpath.getFileSystem(hadoopConf)
+  /** 广播hadoopConf后返回的broadCast对象*/
   private val broadcastedConf = sc.broadcast(new SerializableConfiguration(hadoopConf))
 
   // Fail fast if checkpoint directory does not exist
   require(fs.exists(cpath), s"Checkpoint directory does not exist: $checkpointPath")
 
   /**
-   * Return the path of the checkpoint directory this RDD reads data from.
+   * 返回该RDD读取数据的检查点目录路径
+    * Return the path of the checkpoint directory this RDD reads data from.
    */
   override val getCheckpointFile: Option[String] = Some(checkpointPath)
-
+  /** 分区器,优先从_partitioner成员变量中拿.否则调用readCheckpointedPartitionerFile
+    * 从检查点目录下读取分区计算器.
+    * */
   override val partitioner: Option[Partitioner] = {
     _partitioner.orElse {
       ReliableCheckpointRDD.readCheckpointedPartitionerFile(context, checkpointPath)
@@ -116,6 +123,7 @@ private[spark] object ReliableCheckpointRDD extends Logging {
   }
 
   /**
+    * 将RDD的数据写入检查点目录
    * Write RDD to checkpoint files and return a ReliableCheckpointRDD representing the RDD.
    */
   def writeRDDToCheckpointDirectory[T: ClassTag](
@@ -161,7 +169,8 @@ private[spark] object ReliableCheckpointRDD extends Logging {
   }
 
   /**
-   * Write an RDD partition's data to a checkpoint file.
+   * 将RDD分区的数据写入检查点目录下的文件夹中
+    * Write an RDD partition's data to a checkpoint file.
    */
   def writePartitionToCheckpointFile[T: ClassTag](
       path: String,
@@ -215,7 +224,9 @@ private[spark] object ReliableCheckpointRDD extends Logging {
   }
 
   /**
-   * Write a partitioner to the given RDD checkpoint directory. This is done on a best-effort
+   * 将分区器的数据写入检查点的目录下.
+    *
+    * Write a partitioner to the given RDD checkpoint directory. This is done on a best-effort
    * basis; any exception while writing the partitioner is caught, logged and ignored.
    */
   private def writePartitionerToCheckpointDir(
